@@ -1,0 +1,2 @@
+FAIL flat-surface hit ownership: 50/100 assigned to a different cell
+FAIL surface interception: 1428/100000 rays exited through the substrate

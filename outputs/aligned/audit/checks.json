@@ -1,0 +1,54 @@
+{
+  "runs": {
+    "yield_cosine": {
+      "before_missed": 28448,
+      "after_missed": 823,
+      "particles": 1000000,
+      "inventory_errors": {
+        "silicon": 0,
+        "chlorine": null
+      },
+      "bottom_20_rows_intact": true,
+      "mapping_failures": 3991,
+      "normal_mapped_hits": 151091,
+      "periodic_orbits": 0
+    },
+    "yield_enhanced": {
+      "before_missed": 15281,
+      "after_missed": 410,
+      "particles": 1000000,
+      "inventory_errors": {
+        "silicon": 0,
+        "chlorine": null
+      },
+      "bottom_20_rows_intact": true,
+      "mapping_failures": 2635,
+      "normal_mapped_hits": 124512,
+      "periodic_orbits": 0
+    },
+    "chlorination": {
+      "before_missed": 17185,
+      "after_missed": 566,
+      "particles": 1000000,
+      "inventory_errors": {
+        "silicon": 0,
+        "chlorine": 0
+      },
+      "bottom_20_rows_intact": true,
+      "mapping_failures": 301,
+      "normal_mapped_hits": 66887,
+      "periodic_orbits": 0
+    }
+  },
+  "tests": {
+    "core": {
+      "exit_code": 0,
+      "output": "PASS angular functions\nPASS yield after surface capture\nPASS source distribution moments\nPASS curve intersection and derivative\nPASS fitted flat surface\nPASS vertical fit and secondary collision\nPASS specular reflection\nPASS single Cl stoichiometry\nPASS inventory and seed\nPASS fit cache update\nPASS reaction-cell normal mapping\nPASS periodic cell mapping\nPASS curve intersection support\n13/13 test groups passed\n"
+    },
+    "geometry": {
+      "exit_code": 1,
+      "output": "PASS flat-surface hit ownership: 0/100 assigned to a different cell\nFAIL surface interception: 44/100000 rays exited through the substrate\n"
+    }
+  },
+  "preserved_physics_verified": true
+}

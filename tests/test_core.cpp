@@ -1,0 +1,171 @@
+#include "simulation.hpp"
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+
+using namespace etch;
+void check(bool condition, const std::string& message) {
+    if (!condition) throw std::runtime_error(message);
+}
+void close(double actual, double expected, double tolerance = 1e-6) {
+    check(std::abs(actual - expected) < tolerance, "expected " + std::to_string(expected)
+          + ", got " + std::to_string(actual));
+}
+Geometry small_geometry() {
+    return Geometry{40, 80, 20, 6, 16};
+}
+Settings small_settings() { Settings s{small_geometry()}; s.max_bounces = 500; return s; }
+Source beam() { return {constant(0), constant(100)}; }
+
+void angular_functions() {
+    close(cosine_yield(1), 1); close(cosine_yield(0), 0);
+    close(enhanced_yield(1), 1); close(enhanced_yield(0), 0);
+    close(cosine_yield(0.5), 0.5); close(enhanced_yield(0.5), 2);
+}
+void yield_expectation() {
+    Random rng(8);
+    for (auto law : {cosine_yield, enhanced_yield}) {
+        Geometry g = small_geometry(); Grid grid(g); YieldReaction reaction(law);
+        double mu = 0.65;
+        int cell = grid.index(20, 20);
+        for (int i = 0; i < 200000; ++i) {
+            grid.sites[cell][0] = 30;
+            reaction.apply(grid, cell, mu, rng);
+        }
+        close(reaction.removed / 200000.0, law(mu), 0.015);
+    }
+    Grid grid(small_geometry()); YieldReaction reaction; int cell = grid.index(20, 20);
+    reaction.apply(grid, cell, 0, rng);
+    check(reaction.removed == 0, "zero angular yield is not divided by incidence cosine");
+}
+void source_distributions() {
+    Random rng(42);
+    double sigma = 10 * std::acos(-1.0) / 180 / 2.354820045;
+    auto angle = gaussian(0, sigma, -1.5, 1.5);
+    auto cosine = cosine_angle();
+    double sum = 0, sum2 = 0, cosine_sin2 = 0;
+    for (int i = 0; i < 100000; ++i) {
+        double a = angle(rng); sum += a; sum2 += a * a;
+        double b = cosine(rng); cosine_sin2 += std::pow(std::sin(b), 2);
+    }
+    close(sum / 100000, 0, 0.001);
+    close(sum2 / 100000, sigma * sigma, 0.0001);
+    close(cosine_sin2 / 100000, 1.0 / 3, 0.005);
+}
+void curve_intersection() {
+    Curve flat{{0, 5}, {1, 0}, {0, -1}, 0, 0, 0};
+    auto hit = flat.intersection({0, 0}, {0, 1}, 0, 10);
+    check(hit.has_value(), "flat curve hit"); close(*hit, 5);
+    check(!flat.intersection({0, 0}, {0, -1}, 0, 10), "backward root rejected");
+    Curve parabola{{0, 5}, {1, 0}, {0, -1}, 0.2, 0, 0};
+    auto curved_hit = parabola.intersection({0.5, 0}, {0, 1}, 0, 10);
+    check(curved_hit.has_value(), "quadratic hit"); close(*curved_hit, 4.95);
+    Vec n = parabola.normal(0.5);
+    close(n.x, -0.2 / std::sqrt(1.04)); close(n.z, -1 / std::sqrt(1.04));
+}
+void fitted_flat_surface() {
+    Grid grid(small_geometry()); Surface surface(grid);
+    Vec normal = surface.curve(20, 20).normal(0);
+    close(normal.x, 0); close(normal.z, -1);
+    Transport transport(grid, surface);
+    auto hit = transport.next_hit({{20.3, 1}, {0, 1}, 100});
+    check(hit.has_value(), "flat transport hit"); close(hit->position.z, 20.5, 1e-5);
+}
+void vertical_wall_and_second_hit() {
+    Grid grid(small_geometry());
+    for (int z = 20; z < 50; ++z) for (int x = 12; x < 28; ++x) {
+        int i = grid.index(x, z); grid.material[i] = Gas; grid.sites[i] = {};
+    }
+    grid.refresh(20, 40, 80);
+    Surface surface(grid); Transport transport(grid, surface);
+    Particle p{{25, 30}, unit({1, 2}), 100};
+    auto wall = transport.next_hit(p);
+    check(wall.has_value(), "wall collision");
+    close(wall->position.x, 28.5, 1e-5); close(wall->normal.x, -1, 1e-5);
+    p.direction = reflected(p.direction, wall->normal);
+    p.position = wall->position + wall->normal * 1e-5;
+    auto floor = transport.next_hit(p);
+    check(floor.has_value(), "second collision after reflection");
+    close(floor->position.z, 50.5, 0.2);
+}
+void reflection_geometry() {
+    Vec d = unit({1, 2}), n{0, -1}, r = reflected(d, n);
+    close(norm(r), 1); close(dot(r, n), -dot(d, n)); close(r.x, d.x);
+}
+void surface_cell_mapping() {
+    Grid grid(small_geometry()); Surface surface(grid); Transport transport(grid, surface);
+    Vec origin{20.5, 20.5};
+    auto direct = transport.reaction_cell({20.7, 20.5}, {0, -1}, origin);
+    check(direct && direct->x == 20 && direct->z == 20, "intersection cell takes precedence");
+    auto gas = transport.reaction_cell({20.7, 19.7}, {0, -1}, origin);
+    check(gas && gas->x == 20 && gas->z == 20, "gas intersection maps inward along normal");
+    auto interior = transport.reaction_cell({20.7, 21.2}, {0, -1}, origin);
+    check(interior && interior->x == 20 && interior->z == 20, "interior intersection maps outward along normal");
+    auto unmapped = transport.reaction_cell({20.7, 10}, {1, 0}, {20.5, 10});
+    check(!unmapped, "no arbitrary owner is substituted when the normal misses the surface");
+}
+void periodic_cell_mapping() {
+    Geometry g = small_geometry(); g.opening = g.nx;
+    Grid grid(g); Surface surface(grid); Transport transport(grid, surface);
+    auto cell = transport.reaction_cell({-0.2, 20.5}, {0, -1}, {-0.5, 20.5});
+    check(cell && cell->x == g.nx - 1 && cell->z == 20, "periodic point maps to wrapped cell");
+}
+void curve_support_is_set_by_the_tracer() {
+    Curve flat{{0, 5}, {1, 0}, {0, -1}, 0, 0, 0};
+    auto hit = flat.intersection({2, 0}, {0, 1}, 0, 10);
+    check(hit.has_value(), "valid roots are not discarded by an extra one-cell clipping box");
+    close(*hit, 5);
+}
+void chemistry_stoichiometry() {
+    Geometry g = small_geometry(); g.atoms_per_cell = 1;
+    Grid grid(g); ChlorinationReaction reaction; Random rng(7);
+    int cell = grid.index(20, 20);
+    for (int state = 1; state <= 3; ++state) {
+        reaction.apply(grid, cell, 1, rng);
+        check(grid.sites[cell][state] == 1 && grid.remaining(cell) == 1, "single Cl advances one state");
+    }
+    reaction.apply(grid, cell, 1, rng);
+    check(grid.remaining(cell) == 0 && reaction.removed == 1, "SiCl4 detachment");
+    check(reaction.products_sicl4 == 1 && reaction.captures == 4, "four Cl per SiCl4");
+}
+void inventories_and_repeatability() {
+    for (int model = 0; model < 2; ++model) {
+        auto make = [model]() -> std::unique_ptr<Reaction> {
+            if (model == 0) return std::make_unique<YieldReaction>();
+            return std::make_unique<ChlorinationReaction>();
+        };
+        Simulation a(small_settings(), beam(), make()), b(small_settings(), beam(), make());
+        a.advance(15000); b.advance(15000);
+        check(a.grid.sites == b.grid.sites && a.grid.material == b.grid.material, "repeatable seed");
+        check(a.grid.silicon_inventory() + a.reaction->removed + a.stats.pruned_si == a.initial_si, "Si inventory");
+        if (model == 1) check(a.reaction->captures == a.grid.chlorine_inventory()
+            + 4 * a.reaction->products_sicl4 + a.stats.pruned_cl, "Cl inventory");
+    }
+}
+void fit_cache_updates() {
+    Grid grid(small_geometry()); Surface surface(grid);
+    surface.curve(20, 20); auto count = surface.fit_count;
+    surface.curve(20, 20); check(surface.fit_count == count, "reuse unchanged fit");
+    grid.sites[grid.index(20, 20)] = {};
+    grid.remove_empty_cell(20, 20); surface.invalidate(20, 20);
+    surface.curve(20, 21); check(surface.fit_count > count, "refit changed boundary");
+}
+int main() {
+    std::cout << std::unitbuf;
+    std::vector<std::pair<std::string, std::function<void()>>> tests = {
+        {"angular functions", angular_functions}, {"yield after surface capture", yield_expectation},
+        {"source distribution moments", source_distributions}, {"curve intersection and derivative", curve_intersection},
+        {"fitted flat surface", fitted_flat_surface}, {"vertical fit and secondary collision", vertical_wall_and_second_hit},
+        {"specular reflection", reflection_geometry}, {"single Cl stoichiometry", chemistry_stoichiometry},
+        {"inventory and seed", inventories_and_repeatability}, {"fit cache update", fit_cache_updates},
+        {"reaction-cell normal mapping", surface_cell_mapping}, {"periodic cell mapping", periodic_cell_mapping},
+        {"curve intersection support", curve_support_is_set_by_the_tracer}
+    };
+    int failed = 0;
+    for (auto& [name, test] : tests) {
+        try { test(); std::cout << "PASS " << name << '\n'; }
+        catch (const std::exception& e) { ++failed; std::cerr << "FAIL " << name << ": " << e.what() << '\n'; }
+    }
+    std::cout << tests.size() - failed << "/" << tests.size() << " test groups passed\n";
+    return failed ? 1 : 0;
+}

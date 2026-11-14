@@ -1,0 +1,26 @@
+#pragma once
+#include "grid.hpp"
+#include <optional>
+
+namespace etch {
+// Local least-squares graph: v = a*u^2 + b*u + c in a rotated frame.
+struct Curve {
+    Vec origin, tangent, outward;
+    double a = 0, b = 0, c = 0;
+    Vec position(double u) const;
+    Vec normal(double u) const;
+    std::optional<double> intersection(Vec p, Vec d, double start, double end) const;
+};
+class Surface {
+    Grid& grid;
+    int radius;
+    std::vector<Curve> curves;
+    std::vector<uint8_t> dirty;
+public:
+    long long fit_count = 0, rank_deficient_fits = 0;
+    explicit Surface(Grid& grid, int radius = 3);
+    int fit_radius() const { return radius; }
+    const Curve& curve(int x, int z);
+    void invalidate(int x, int z);
+};
+}

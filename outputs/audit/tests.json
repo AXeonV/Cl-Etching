@@ -1,0 +1,10 @@
+{
+  "core": {
+    "exit_code": 0,
+    "log": "audit/core_tests.txt"
+  },
+  "geometry": {
+    "exit_code": 1,
+    "log": "audit/geometry_tests.txt"
+  }
+}
