@@ -2,44 +2,55 @@
 
 支持二维截面和三维体素计算，通过表面捕获、反射、反应和元胞更新推进刻蚀。`--dimension 2|3` 选择几何后端，默认值为 2。两种计算共用反应模型、随机分布和逐粒子推进流程。
 
-## 结构
+![etching-2d](image/etching-2d.png)
+![etching-3d](image/etching-3d.png)
 
-```text
-src/
-  app/                命令行解析、维度选择和组件装配
-  common/
-    engine.hpp        共用的逐粒子推进与统计
-    reaction.hpp/.cpp 产额模型和单 Cl 逐步氯化模型
-    material.hpp      固相位点与材料类型
-    random.hpp        随机数及标量分布
-    linear.hpp        二次拟合的最小二乘求解
-    output.hpp        数组和统计输出
-    events.hpp        运行设置与事件统计
-  planar/             二维截面后端，命名空间 etch::planar
-    grid.hpp/.cpp     二维网格和四邻接边界
-    surface.hpp/.cpp  局部二次曲线
-    transport.hpp/.cpp 二维射线追踪
-    cell_update.hpp/.cpp 八邻域元胞更新
-    source.hpp        二维发射角与粒子源
-    vector.hpp        平面向量
-    backend.hpp       向共用引擎提供二维组件
-    output.cpp        二维几何输出
-  spatial/            三维体素后端，命名空间 etch::spatial
-    grid.hpp/.cpp     三维网格和六邻接边界
-    surface.hpp/.cpp  局部二次曲面
-    traversal.hpp     面、棱、顶点的体素遍历
-    transport.hpp/.cpp 三维射线追踪
-    cell_update.hpp/.cpp 二十六邻域元胞更新
-    source.hpp        立体角分布与面粒子源
-    vector.hpp        空间向量
-    backend.hpp       向共用引擎提供三维组件
-    output.cpp        三维几何输出
-utils/                构建、结果读取、截面和体素绘图
-tests/
-  planar/             二维回归测试
-  spatial/            三维曲面、追踪和库存测试
-  test_cli.py         维度入口与输出格式测试
-outputs/              仿真输出
+## 项目结构
+
+主要目录与组件如下，连线表示目录包含关系。
+
+```mermaid
+flowchart LR
+    Root["."]
+    Root --> Src["src/<br/>核心仿真代码"]
+    Root --> Utils["utils/<br/>构建、结果读取与绘图"]
+    Root --> Tests["tests/<br/>单元测试与几何回归"]
+    Root --> Outputs["outputs/<br/>仿真输出，不纳入版本控制"]
+
+    Src --> App["app/<br/>命令行解析、维度选择与组件装配"]
+    Src --> Common["common/<br/>二维与三维共用组件"]
+    Src --> Planar["planar/<br/>二维截面后端，etch::planar"]
+    Src --> Spatial["spatial/<br/>三维体素后端，etch::spatial"]
+
+    Common --> Engine["engine.hpp · events.hpp<br/>逐粒子推进、运行设置与统计"]
+    Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应模型、固相位点与材料类型"]
+    Common --> Random["random.hpp<br/>随机数与标量分布"]
+    Common --> Linear["linear.hpp<br/>最小二乘求解"]
+    Common --> Output["output.hpp<br/>数组与统计输出"]
+
+    Planar --> PlanarGrid["grid.hpp/.cpp<br/>二维网格与四邻接边界"]
+    Planar --> PlanarSurface["surface.hpp/.cpp<br/>局部二次曲线、法线与交点计算"]
+    Planar --> PlanarTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
+    Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>八邻域删格与库存迁移"]
+    Planar --> PlanarSource["source.hpp<br/>二维发射角与线粒子源"]
+    Planar --> PlanarVector["vector.hpp<br/>平面向量与镜面反射"]
+    Planar --> PlanarBackend["backend.hpp · output.cpp<br/>后端组件装配与二维几何输出"]
+
+    Spatial --> SpatialGrid["grid.hpp/.cpp<br/>三维网格与六邻接边界"]
+    Spatial --> SpatialSurface["surface.hpp/.cpp<br/>局部二次曲面、法线与交点计算"]
+    Spatial --> SpatialTransport["transport.hpp/.cpp · traversal.hpp<br/>体素遍历、射线追踪与反应元胞定位"]
+    Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>二十六邻域删格与库存迁移"]
+    Spatial --> SpatialSource["source.hpp<br/>立体角分布与面粒子源"]
+    Spatial --> SpatialVector["vector.hpp<br/>空间向量与镜面反射"]
+    Spatial --> SpatialBackend["backend.hpp · output.cpp<br/>后端组件装配与三维几何输出"]
+
+    Utils --> Build["build.py<br/>编译与测试入口"]
+    Utils --> Results["results.py<br/>结果读取与库存核对"]
+    Utils --> Plot["plot.py · volume.py<br/>截面与体素剖视图"]
+
+    Tests --> PlanarTests["planar/<br/>二维核心与几何回归测试"]
+    Tests --> SpatialTests["spatial/<br/>三维曲面、追踪与库存测试"]
+    Tests --> CliTests["test_cli.py<br/>维度入口与输出格式测试"]
 ```
 
 ## 碰撞角、捕获与表面反应
