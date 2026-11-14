@@ -14,28 +14,31 @@ import numpy as np
 from utils.results import load_run
 
 
-def plot_runs(directories, output):
+def plot_runs(directories, output, slice_y=None):
     runs = [load_run(directory) for directory in directories]
+    sections = [run["material"][:, run["meta"]["ny"] // 2 if slice_y is None else slice_y, :]
+                if run["meta"].get("dimension", 2) == 3 else run["material"] for run in runs]
     half_width = 0
     max_depth = 0
-    for run in runs:
+    for run, section in zip(runs, sections):
         m = run["meta"]
-        z, x = np.nonzero(run["material"][m["surface_z"]:] == 0)
-        half_width = max(half_width, np.max(np.abs(x + 0.5 - m["nx"] / 2)) * m["cell_nm"])
-        max_depth = max(max_depth, (np.max(z) + 1) * m["cell_nm"])
+        z, x = np.nonzero(section[m["surface_z"]:] == 0)
+        half_width = max(half_width, m["opening_cells"] * m["cell_nm"] / 2,
+                         np.abs(x + 0.5 - m["nx"] / 2).max(initial=0) * m["cell_nm"])
+        max_depth = max(max_depth, (z.max(initial=0) + 1) * m["cell_nm"])
     figure, axes = plt.subplots(1, len(directories), figsize=(4.8 * len(directories), 7), squeeze=False,
                                 constrained_layout=True)
-    for ax, directory, run in zip(axes[0], directories, runs):
+    for ax, directory, run, section in zip(axes[0], directories, runs, sections):
         m = run["meta"]
         arguments = dict(line.split(" ", 1) for line in (Path(directory) / "arguments.txt").read_text().splitlines())
         angular = arguments["--angular"]
         color = "#007f9b" if angular == "cosine" else "#de7438" if angular == "enhanced" else "#7e5794"
         extent = [-m["nx"] * m["cell_nm"] / 2, m["nx"] * m["cell_nm"] / 2,
                   (m["nz"] - m["surface_z"]) * m["cell_nm"], -m["surface_z"] * m["cell_nm"]]
-        ax.imshow(run["material"], cmap=ListedColormap(["white", "#dce8ee", "#283a4b"]),
+        ax.imshow(section, cmap=ListedColormap(["white", "#dce8ee", "#283a4b"]),
                   vmin=0, vmax=2, extent=extent, interpolation="nearest")
         segments = []
-        for row in run["curves"]:
+        for row in (run["curves"] if m.get("dimension", 2) == 2 else []):
             x, z, tx, tz, nx, nz, a, b, c, _ = row
             u = np.linspace(-np.sqrt(2), np.sqrt(2), 41)
             v = a*u*u + b*u + c
@@ -48,17 +51,22 @@ def plot_runs(directories, output):
         titles = {"cosine": "Yield model\n" + r"$F_A(\theta)=\cos\theta$",
                   "enhanced": "Yield model\n" + r"$F_B(\theta)=(1+4\sin^2\theta)\cos\theta$",
                   "not_used": "Single-Cl chlorination\n" + r"$\mathrm{Si}\rightarrow\cdots\rightarrow\mathrm{SiCl_4(g)}$"}
-        ax.set(title=titles[angular], xlabel="Lateral position (nm)", ylabel="Depth from initial Si surface (nm)")
+        title = titles[angular]
+        if m.get("dimension", 2) == 3:
+            index = m["ny"] // 2 if slice_y is None else slice_y
+            title += f"\nVoxel section at y index {index}"
+        ax.set(title=title, xlabel="Lateral position (nm)", ylabel="Depth from initial Si surface (nm)")
         ax.set_xlim(-half_width - 35, half_width + 35)
         ax.set_ylim(max_depth + 50, -m["mask_cells"] * m["cell_nm"] - 25)
         ax.axhline(0, color="#93a3ac", linestyle="--", linewidth=0.6)
         ax.text(0.03, 0.025, f"{m['particles']:,} incident particles", transform=ax.transAxes, fontsize=9)
         ax.set_aspect("equal")
-    figure.suptitle("Fixed-input rerun: material grid and local quadratic fits", fontsize=15)
-    figure.legend(handles=[Patch(facecolor="#dce8ee", label="Si cells"),
-                           Patch(facecolor="#283a4b", label="Fixed mask"),
-                           Line2D([0], [0], color="#007f9b", label="Local fitted collision curves")],
-                  loc="outside lower center", ncol=3, frameon=False, fontsize=9)
+    figure.suptitle("Material geometry and surface profiles", fontsize=15)
+    handles = [Patch(facecolor="#dce8ee", label="Si cells"),
+               Patch(facecolor="#283a4b", label="Fixed mask")]
+    if any(run["meta"].get("dimension", 2) == 2 for run in runs):
+        handles.append(Line2D([0], [0], color="#007f9b", label="Local fitted collision curves"))
+    figure.legend(handles=handles, loc="outside lower center", ncol=len(handles), frameon=False, fontsize=9)
     figure.savefig(output, dpi=160)
     plt.close(figure)
 
@@ -67,5 +75,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("directories", nargs="+", type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--slice-y", type=int)
     args = parser.parse_args()
-    plot_runs(args.directories, args.output)
+    plot_runs(args.directories, args.output, args.slice_y)

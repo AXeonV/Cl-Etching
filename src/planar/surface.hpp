@@ -3,7 +3,7 @@
 #include <optional>
 #include <limits>
 
-namespace etch {
+namespace etch::planar {
 struct CurveProjection { double u, distance; };
 
 // Local least-squares graph: v = a*u^2 + b*u + c in a rotated frame.

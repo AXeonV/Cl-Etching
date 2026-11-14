@@ -1,7 +1,7 @@
 #pragma once
 #include <cmath>
 
-namespace etch {
+namespace etch::planar {
 struct Vec {
     double x = 0, z = 0;
     Vec operator+(Vec b) const { return {x + b.x, z + b.z}; }

@@ -1,11 +1,12 @@
 #include "cell_update.hpp"
 #include <algorithm>
 
-namespace etch {
+namespace etch::planar {
 CellUpdater::CellUpdater(Grid& g, Surface& s, double weight)
     : grid(g), surface(s), normal_weight(weight) {}
 
-CellRemoval CellUpdater::remove(int x, int z) {
+CellRemoval CellUpdater::remove(int cell_id) {
+    int x=cell_id%grid.geometry.nx, z=cell_id/grid.geometry.nx;
     int original = grid.index(x, z), selected = original;
     Curve curve = surface.curve(x, z);
     auto center = curve.project(curve.origin);

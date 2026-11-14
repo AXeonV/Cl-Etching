@@ -1,7 +1,7 @@
 #pragma once
-#include "vector.hpp"
-#include <functional>
 #include <random>
+#include <functional>
+#include <cmath>
 
 namespace etch {
 using Random = std::mt19937_64;
@@ -20,19 +20,4 @@ inline Distribution gaussian(double mean, double sigma, double lower, double upp
         return value;
     };
 }
-inline Distribution cosine_angle() {
-    // The normalized 2-D flux density is cos(alpha) / 2.
-    return [](Random& rng) { return std::asin(2 * uniform(rng) - 1); };
 }
-struct Particle { Vec position, direction; double energy; };
-struct Source {
-    Distribution angle, energy;
-    Particle emit(Random& rng, double width) const {
-        double x = width * uniform(rng);
-        double alpha = angle(rng);
-        double e = energy(rng);
-        return {{x, 0.25}, {std::sin(alpha), std::cos(alpha)}, e};
-    }
-};
-}
-

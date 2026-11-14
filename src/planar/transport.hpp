@@ -1,11 +1,12 @@
 #pragma once
 #include "source.hpp"
+#include "common/events.hpp"
 #include "surface.hpp"
 
-namespace etch {
-struct Hit { Vec position, normal; int x, z; };
+namespace etch::planar {
+struct Hit { Vec position, normal; int cell; };
 struct Cell { int x, z; };
-enum class RayEnd { Escaped, MissedSurface, PeriodicOrbit };
+
 class Transport {
     Grid& grid;
     Surface& surface;

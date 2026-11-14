@@ -3,7 +3,7 @@
 #include <cmath>
 #include <limits>
 
-namespace etch {
+namespace etch::planar {
 namespace {
 constexpr double infinity = std::numeric_limits<double>::infinity();
 
@@ -98,11 +98,11 @@ std::optional<Hit> Transport::next_hit(const Particle& particle) {
             Vec normal=curve.normal(dot(point-curve.origin,curve.tangent));
             auto mapped=reaction_cell(point,normal,curve.origin);
             if (!mapped) { ++mapping_failures; continue; }
-            nearest=*distance; closest=Hit{point,normal,mapped->x,mapped->z};
+            nearest=*distance; closest=Hit{point,normal,grid.index(mapped->x,mapped->z)};
         }
         if (closest) {
-            if (grid.wrap(static_cast<int>(std::floor(closest->position.x)))!=closest->x
-                || static_cast<int>(std::floor(closest->position.z))!=closest->z) ++normal_mapped_hits;
+            if (grid.index(static_cast<int>(std::floor(closest->position.x)),
+                           static_cast<int>(std::floor(closest->position.z)))!=closest->cell) ++normal_mapped_hits;
             return closest;
         }
         walk.advance();

@@ -1,9 +1,10 @@
-#include "simulation.hpp"
+#include "planar/backend.hpp"
 #include <iostream>
 #include <algorithm>
 #include <limits>
 
 using namespace etch;
+using namespace etch::planar;
 
 // Exhaustive fitted-patch intersections provide a reference independent of the DDA index.
 std::optional<Hit> exhaustive_hit(Grid& grid, Surface& surface, Transport& transport, Particle ray) {
@@ -31,7 +32,7 @@ std::optional<Hit> exhaustive_hit(Grid& grid, Surface& surface, Transport& trans
         Vec point=ray.position+ray.direction*(*distance);
         Vec normal=curve.normal(dot(point-curve.origin,curve.tangent));
         auto owner=transport.reaction_cell(point,normal,curve.origin);
-        if(owner){nearest=*distance;best=Hit{point,normal,owner->x,owner->z};}
+        if(owner){nearest=*distance;best=Hit{point,normal,grid.index(owner->x,owner->z)};}
     }
     return best;
 }
@@ -69,7 +70,7 @@ int main() {
     for (int i = 0; i < 100; ++i) {
         double x = 125 + (i + 0.5) / 100;
         auto hit = transport.next_hit({{x, 1}, {0, 1}, 100});
-        if (!hit || hit->x != static_cast<int>(std::floor(x))) ++wrong_cells;
+        if (!hit || hit->cell % geometry.nx != static_cast<int>(std::floor(x))) ++wrong_cells;
     }
     std::cout << (wrong_cells ? "FAIL " : "PASS ") << "flat-surface hit ownership: "
               << wrong_cells << "/100 assigned to a different cell\n";

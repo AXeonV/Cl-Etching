@@ -1,7 +1,7 @@
 #pragma once
 #include "surface.hpp"
 
-namespace etch {
+namespace etch::planar {
 struct CellRemoval {
     int x, z;
     std::array<uint16_t, 4> residual;
@@ -15,6 +15,6 @@ class CellUpdater {
     double normal_weight;
 public:
     CellUpdater(Grid& grid, Surface& surface, double normal_weight = 0.3);
-    CellRemoval remove(int x, int z);
+    CellRemoval remove(int cell);
 };
 }

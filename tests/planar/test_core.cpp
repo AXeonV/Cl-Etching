@@ -1,10 +1,11 @@
-#include "simulation.hpp"
+#include "planar/backend.hpp"
 #include <functional>
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
 using namespace etch;
+using namespace etch::planar;
 void check(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error(message);
 }
@@ -27,9 +28,9 @@ void angular_functions() {
 class FixedSurfaceYield : public YieldReaction {
 public:
     using YieldReaction::YieldReaction;
-    void apply(Grid& grid, int cell, double mu, double probability, Random& rng) override {
-        YieldReaction::apply(grid, cell, mu, probability, rng);
-        grid.sites[cell][0] = grid.geometry.atoms_per_cell;
+    void apply(Sites& sites, double mu, double probability, Random& rng) override {
+        YieldReaction::apply(sites, mu, probability, rng);
+        sites[0] = 30;
     }
 };
 void yield_per_incident_ion() {
@@ -54,7 +55,7 @@ void yield_per_incident_ion() {
     Grid grid(small_geometry()); YieldReaction reaction(enhanced_yield); Random rng(8);
     int cell = grid.index(20,20);
     grid.sites[cell][0] = 1;
-    reaction.apply(grid, cell, 0.5, 0.5, rng);
+    reaction.apply(grid.sites[cell], 0.5, 0.5, rng);
     check(grid.remaining(cell) == 0 && reaction.removed == 1, "removal is limited by cell inventory");
 }
 void source_distributions() {
@@ -164,10 +165,10 @@ void chemistry_stoichiometry() {
     Grid grid(g); ChlorinationReaction reaction; Random rng(7);
     int cell = grid.index(20, 20);
     for (int state = 1; state <= 3; ++state) {
-        reaction.apply(grid, cell, 1, 1, rng);
+        reaction.apply(grid.sites[cell], 1, 1, rng);
         check(grid.sites[cell][state] == 1 && grid.remaining(cell) == 1, "single Cl advances one state");
     }
-    reaction.apply(grid, cell, 1, 1, rng);
+    reaction.apply(grid.sites[cell], 1, 1, rng);
     check(grid.remaining(cell) == 0 && reaction.removed == 1, "SiCl4 detachment");
     check(reaction.products_sicl4 == 1 && reaction.captures == 4, "four Cl per SiCl4");
 }
@@ -236,7 +237,7 @@ void cell_removal_and_inventory_transfer() {
         grid.refresh(x, 20, 3);
         long long si = grid.silicon_inventory(), cl = grid.chlorine_inventory();
         surface.curve(x-1, 20); auto fits = surface.fit_count;
-        auto removal = updater.remove(x, 20);
+        auto removal = updater.remove(grid.index(x,20));
         check(removal.relocated && grid.index(removal.x, removal.z) == protrusion,
               "remove protruding neighbor rather than create a hole beneath it");
         check(grid.sites[original] == inventory && grid.material[original] == Silicon,
@@ -259,14 +260,14 @@ void flat_removal_and_fixed_mask() {
     Geometry g = small_geometry(); g.opening = g.nx;
     Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
     grid.sites[grid.index(20,20)] = {};
-    auto removal = updater.remove(20,20);
+    auto removal = updater.remove(grid.index(20,20));
     check(!removal.relocated && removal.x == 20 && removal.z == 20,
           "flat surface advances at the underfilled cell");
     Grid masked(g); int mask = masked.index(19,19);
     masked.material[mask] = Mask; masked.refresh(20,20,3);
     Surface masked_surface(masked); CellUpdater masked_updater(masked,masked_surface);
     masked.sites[masked.index(20,20)] = {};
-    masked_updater.remove(20,20);
+    masked_updater.remove(masked.index(20,20));
     check(masked.material[mask] == Mask, "fixed mask is not a silicon removal candidate");
 }
 

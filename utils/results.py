@@ -7,14 +7,15 @@ import numpy as np
 def load_run(directory):
     directory = Path(directory)
     meta = json.loads((directory / "summary.json").read_text())
-    shape = meta["nz"], meta["nx"]
+    shape = ((meta["nz"], meta["ny"], meta["nx"]) if meta.get("dimension", 2) == 3
+             else (meta["nz"], meta["nx"]))
     return {
         "directory": directory, "meta": meta,
         "material": np.fromfile(directory / "material.bin", dtype="u1").reshape(shape),
         "sites": np.fromfile(directory / "sites.bin", dtype="<u2").reshape(*shape, 4),
         "primary": np.fromfile(directory / "primary_hits.bin", dtype="<u4").reshape(shape),
         "secondary": np.fromfile(directory / "secondary_hits.bin", dtype="<u4").reshape(shape),
-        "curves": np.loadtxt(directory / "surface.csv", delimiter=",", skiprows=1),
+        "curves": np.loadtxt(directory / "surface.csv", delimiter=",", skiprows=1, ndmin=2),
     }
 
 

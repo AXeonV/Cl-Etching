@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace etch {
+namespace etch::planar {
 Grid::Grid(Geometry g) : geometry(g), material(g.nx * g.nz),
     boundary(g.nx * g.nz), sites(g.nx * g.nz) {
     int left = (g.nx - g.opening) / 2, right = left + g.opening;
@@ -41,15 +41,4 @@ void Grid::remove_empty_cell(int x, int z) {
     material[index(x, z)] = Gas;
     refresh(x, z, 2);
 }
-long long Grid::silicon_inventory() const {
-    long long sum = 0;
-    for (const auto& state : sites) for (int n : state) sum += n;
-    return sum;
 }
-long long Grid::chlorine_inventory() const {
-    long long sum = 0;
-    for (const auto& state : sites) for (int s = 1; s < 4; ++s) sum += s * state[s];
-    return sum;
-}
-}
-
