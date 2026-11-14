@@ -1,5 +1,6 @@
 #include "simulation.hpp"
 #include <functional>
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 
@@ -101,11 +102,35 @@ void vertical_wall_and_second_hit() {
     check(wall.has_value(), "wall collision");
     close(wall->position.x, 28.5, 1e-5); close(wall->normal.x, -1, 1e-5);
     p.direction = reflected(p.direction, wall->normal);
-    p.position = wall->position + wall->normal * 1e-5;
+    p.position = wall->position;
     auto floor = transport.next_hit(p);
     check(floor.has_value(), "second collision after reflection");
     close(floor->position.z, 50.5, 0.2);
 }
+void v_groove_reflection_and_reverse_path() {
+    Geometry g{100,120,20,6,100}; Grid grid(g);
+    for (int z=20;z<80;++z) for(int x=0;x<100;++x) {
+        if (std::abs(x-50)<80-z) {
+            int cell=grid.index(x,z);grid.material[cell]=Gas;grid.sites[cell]={};
+        }
+    }
+    grid.refresh(50,60,120);
+    Surface surface(grid);Transport transport(grid,surface);
+    Particle ray{{60,30},{0,1},100};
+    auto first=transport.next_hit(ray);check(first.has_value(),"V-groove first wall hit");
+    close(first->position.x,60);close(first->position.z,71);
+    ray.position=first->position;ray.direction=reflected(ray.direction,first->normal);
+    close(ray.direction.x,-1);close(ray.direction.z,0);
+    auto second=transport.next_hit(ray);check(second.has_value(),"reflected ray hits opposite wall");
+    close(second->position.x,41);close(second->position.z,71);
+    Particle reverse{second->position,ray.direction*-1,100};
+    auto back=transport.next_hit(reverse);check(back.has_value(),"reversed ray returns to first wall");
+    close(norm(back->position-first->position),0);
+    ray.position=second->position;ray.direction=reflected(ray.direction,second->normal);
+    close(ray.direction.x,0);close(ray.direction.z,-1);
+    check(!transport.next_hit(ray)&&transport.last_end==RayEnd::Escaped,"second reflection exits at top");
+}
+
 void reflection_geometry() {
     Vec d = unit({1, 2}), n{0, -1}, r = reflected(d, n);
     close(norm(r), 1); close(dot(r, n), -dot(d, n)); close(r.x, d.x);
@@ -164,10 +189,25 @@ void fit_cache_updates() {
     Grid grid(small_geometry()); Surface surface(grid);
     surface.curve(20, 20); auto count = surface.fit_count;
     surface.curve(20, 20); check(surface.fit_count == count, "reuse unchanged fit");
+    surface.candidates(20,19);
     grid.sites[grid.index(20, 20)] = {};
     grid.remove_empty_cell(20, 20); surface.invalidate(20, 20);
+    const auto& candidates=surface.candidates(20,19);
+    check(std::find(candidates.begin(),candidates.end(),grid.index(20,20))==candidates.end(), "remove stale broad-phase candidate");
+    check(std::find(candidates.begin(),candidates.end(),grid.index(20,21))!=candidates.end(), "index newly exposed surface cell");
     surface.curve(20, 21); check(surface.fit_count > count, "refit changed boundary");
 }
+void isolated_cell_has_no_centroid_normal() {
+    Grid grid(small_geometry());
+    int x=20,z=10,cell=grid.index(x,z);
+    grid.material[cell]=Silicon;grid.sites[cell][0]=12;grid.refresh(x,z,2);
+    Surface surface(grid);
+    const Curve& curve=surface.curve(x,z);
+    check(!curve.defined,"isolated cell does not receive an arbitrary normal");
+    check(surface.undefined_normal_fits==1,"record centroid degeneracy");
+    check(grid.remaining(cell)==12,"geometric diagnosis preserves isolated Si inventory");
+}
+
 void curve_normal_distance() {
     Curve flat{{0, 0}, {1, 0}, {0, 1}, 0, 0, 0};
     close(flat.project({2, 3}).distance, 3);
@@ -233,12 +273,14 @@ void flat_removal_and_fixed_mask() {
 int main() {
     std::cout << std::unitbuf;
     std::vector<std::pair<std::string, std::function<void()>>> tests = {
+        {"centroid degeneracy", isolated_cell_has_no_centroid_normal},
         {"normal distance to quadratic curve", curve_normal_distance},
         {"cell removal and inventory transfer", cell_removal_and_inventory_transfer},
         {"flat removal and fixed mask", flat_removal_and_fixed_mask},
         {"angular functions", angular_functions}, {"yield per incident ion including capture and reflection", yield_per_incident_ion},
         {"source distribution moments", source_distributions}, {"curve intersection and derivative", curve_intersection},
         {"fitted flat surface", fitted_flat_surface}, {"vertical fit and secondary collision", vertical_wall_and_second_hit},
+        {"V-groove reflection and reverse path", v_groove_reflection_and_reverse_path},
         {"specular reflection", reflection_geometry}, {"single Cl stoichiometry", chemistry_stoichiometry},
         {"inventory and seed", inventories_and_repeatability}, {"fit cache update", fit_cache_updates},
         {"reaction-cell normal mapping", surface_cell_mapping}, {"periodic cell mapping", periodic_cell_mapping},

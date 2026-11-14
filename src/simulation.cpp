@@ -46,7 +46,7 @@ void Simulation::advance(long long count) {
             }
             if (!settings.reflections) break;
             if (settings.max_bounces > 0 && bounce == settings.max_bounces) { ++stats.bounce_limit; break; }
-            particle.position = hit->position + hit->normal * 1e-5;
+            particle.position = hit->position;
             particle.position.x -= grid.geometry.nx * std::floor(particle.position.x / grid.geometry.nx);
             particle.direction = reflected(particle.direction, hit->normal);
             ++stats.reflections;
@@ -68,6 +68,7 @@ void Simulation::save(const std::string& directory, double elapsed_seconds) {
     curves << "x,z,tx,tz,nx,nz,a,b,c,cell\n" << std::setprecision(15);
     for (int cell : grid.surface_cells) {
         const auto& c = surface.curve(cell % grid.geometry.nx, cell / grid.geometry.nx);
+        if (!c.defined) continue;
         curves << c.origin.x << ',' << c.origin.z << ',' << c.tangent.x << ',' << c.tangent.z << ','
                << c.outward.x << ',' << c.outward.z << ',' << c.a << ',' << c.b << ',' << c.c << ',' << cell << '\n';
     }
@@ -92,6 +93,7 @@ void Simulation::save(const std::string& directory, double elapsed_seconds) {
       << "  \"pruned_si\": " << stats.pruned_si << ", \"pruned_cl\": " << stats.pruned_cl << ",\n"
       << "  \"periodic_orbits\": " << transport.periodic_orbits << ",\n"
       << "  \"rank_deficient_fits\": " << surface.rank_deficient_fits << ",\n"
+      << "  \"undefined_normal_fits\": " << surface.undefined_normal_fits << ",\n"
       << "  \"captures\": " << reaction->captures << ", \"removed_si\": " << reaction->removed << ",\n"
       << "  \"sicl4_products\": " << reaction->products_sicl4 << ",\n"
       << "  \"initial_si\": " << initial_si << ", \"remaining_si\": " << grid.silicon_inventory() << ",\n"

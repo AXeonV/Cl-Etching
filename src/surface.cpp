@@ -70,7 +70,9 @@ std::optional<double> Curve::intersection(Vec p, Vec d, double start, double end
     double nearest = std::numeric_limits<double>::infinity();
     for (int i = 0; i < count; ++i) {
         double t = roots[i];
-        if (t >= start && t <= end && dot(d, normal(u + du * t)) < -1e-9)
+        double hit_u = u + du*t;
+        if (t >= start && t <= end && hit_u >= u_min && hit_u <= u_max
+            && dot(d, normal(hit_u)) < -1e-9)
             nearest = std::min(nearest, t);
     }
     if (std::isfinite(nearest)) return nearest;
@@ -115,31 +117,37 @@ int least_squares(double matrix[3][3], const double rhs[3], double result[3]) {
     return rank;
 }
 
-Surface::Surface(Grid& g, int r) : grid(g), radius(r), curves(g.material.size()), dirty(g.material.size(), 1) {}
+Surface::Surface(Grid& g, int r) : grid(g), radius(r), curves(g.material.size()), dirty(g.material.size(), 1),
+    dirty_candidates(g.material.size(),1), nearby_cells(g.material.size()) {}
 const Curve& Surface::curve(int x, int z) {
     int id = grid.index(x, z);
     if (!dirty[id]) return curves[id];
     std::vector<Vec> points;
-    Vec gas_direction{};
+    Vec solid_centroid{};
+    int solid_count = 0;
     for (int dz = -radius; dz <= radius; ++dz) for (int dx = -radius; dx <= radius; ++dx) {
-        int zz = z + dz;
-        if (zz < 0 || zz >= grid.geometry.nz || !grid.boundary[grid.index(x + dx, zz)]) continue;
-        points.push_back({static_cast<double>(dx), static_cast<double>(dz)});
-        for (Vec n : {Vec{-1, 0}, Vec{1, 0}, Vec{0, -1}, Vec{0, 1}})
-            if (grid.at(x + dx + static_cast<int>(n.x), zz + static_cast<int>(n.z)) == Gas)
-                gas_direction = gas_direction + n;
+        int zz = z+dz;
+        if (zz < 0 || zz >= grid.geometry.nz) continue;
+        int cell = grid.index(x+dx,zz);
+        if (grid.material[cell] != Gas) {
+            solid_centroid = solid_centroid+Vec{static_cast<double>(dx),static_cast<double>(dz)};
+            ++solid_count;
+        }
+        if (grid.boundary[cell]) points.push_back({static_cast<double>(dx),static_cast<double>(dz)});
     }
-    Vec mean{};
-    for (Vec p : points) mean = mean + p;
-    mean = mean * (1.0 / points.size());
-    double xx = 0, xz = 0, zz = 0;
-    for (Vec p : points) { p = p - mean; xx += p.x*p.x; xz += p.x*p.z; zz += p.z*p.z; }
-    double angle = 0.5 * std::atan2(2 * xz, xx - zz);
-    Vec tangent{std::cos(angle), std::sin(angle)}, outward{tangent.z, -tangent.x};
-    if (dot(outward, gas_direction) < 0) outward = outward * -1;
+    solid_centroid = solid_centroid*(1.0/solid_count);
+    if (solid_centroid.x==0 && solid_centroid.z==0) {
+        curves[id] = {}; curves[id].origin = {x+0.5,z+0.5}; curves[id].defined = false;
+        dirty[id] = 0; ++fit_count; ++undefined_normal_fits;
+        return curves[id];
+    }
+    Vec outward = unit(solid_centroid*-1);
+    Vec tangent{-outward.z,outward.x};
     double matrix[3][3] = {}, rhs[3] = {}, coefficients[3] = {};
+    double u_min = std::numeric_limits<double>::infinity(), u_max = -u_min;
     for (Vec p : points) {
         double u = dot(p, tangent), v = dot(p, outward), row[] = {u*u, u, 1};
+        u_min = std::min(u_min,u); u_max = std::max(u_max,u);
         for (int j = 0; j < 3; ++j) {
             rhs[j] += row[j] * v;
             for (int k = 0; k < 3; ++k) matrix[j][k] += row[j] * row[k];
@@ -147,14 +155,32 @@ const Curve& Surface::curve(int x, int z) {
     }
     int rank = least_squares(matrix, rhs, coefficients);
     if (rank < 3) ++rank_deficient_fits;
-    curves[id] = {{x + 0.5, z + 0.5}, tangent, outward, coefficients[0], coefficients[1], coefficients[2]};
+    curves[id] = {{x+0.5,z+0.5},tangent,outward,
+                  coefficients[0],coefficients[1],coefficients[2],u_min,u_max};
     dirty[id] = 0;
     ++fit_count;
     return curves[id];
 }
+const std::vector<int>& Surface::candidates(int x, int z) {
+    int id = grid.index(x,z);
+    if (!dirty_candidates[id]) return nearby_cells[id];
+    auto& cells = nearby_cells[id]; cells.clear();
+    int reach = radius+1;
+    for (int dz=-reach;dz<=reach;++dz) for(int dx=-reach;dx<=reach;++dx) {
+        int zz=z+dz;
+        if (zz>=0 && zz<grid.geometry.nz && grid.boundary[grid.index(x+dx,zz)])
+            cells.push_back(grid.index(x+dx,zz));
+    }
+    dirty_candidates[id]=0;
+    return cells;
+}
+
 void Surface::invalidate(int x, int z) {
-    for (int dz = -radius - 1; dz <= radius + 1; ++dz)
-        for (int dx = -radius - 1; dx <= radius + 1; ++dx)
-            if (z + dz >= 0 && z + dz < grid.geometry.nz) dirty[grid.index(x + dx, z + dz)] = 1;
+    for (int dz=-radius-2;dz<=radius+2;++dz) for(int dx=-radius-2;dx<=radius+2;++dx) {
+        if (z+dz<0 || z+dz>=grid.geometry.nz) continue;
+        int id=grid.index(x+dx,z+dz);
+        dirty_candidates[id]=1;
+        if (std::abs(dx)<=radius+1 && std::abs(dz)<=radius+1) dirty[id]=1;
+    }
 }
 }
