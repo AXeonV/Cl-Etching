@@ -3,12 +3,15 @@
 #include <optional>
 
 namespace etch {
+struct CurveProjection { double u, distance; };
+
 // Local least-squares graph: v = a*u^2 + b*u + c in a rotated frame.
 struct Curve {
     Vec origin, tangent, outward;
     double a = 0, b = 0, c = 0;
     Vec position(double u) const;
     Vec normal(double u) const;
+    CurveProjection project(Vec point) const;
     std::optional<double> intersection(Vec p, Vec d, double start, double end) const;
 };
 class Surface {

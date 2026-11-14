@@ -6,7 +6,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
 CORE = [ROOT / "src" / f"{name}.cpp" for name in
-        ("grid", "surface", "transport", "reaction", "simulation")]
+        ("grid", "surface", "transport", "reaction", "cell_update", "simulation")]
 
 
 def build(target="simulation"):

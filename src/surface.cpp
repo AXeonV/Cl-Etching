@@ -8,6 +8,48 @@ Vec Curve::position(double u) const {
     return origin + tangent * u + outward * (a * u * u + b * u + c);
 }
 Vec Curve::normal(double u) const { return unit(outward - tangent * (2 * a * u + b)); }
+// The nearest point solves (u-u0) + (f(u)-v0)*f'(u) = 0.
+CurveProjection Curve::project(Vec point) const {
+    Vec local = point - origin;
+    double u0 = dot(local, tangent), v0 = dot(local, outward);
+    double u = (u0 + b * (v0 - c)) / (1 + b*b);
+    if (a != 0) {
+        auto slope_equation = [&](double x) {
+            return (x-u0) + (a*x*x+b*x+c-v0)*(2*a*x+b);
+        };
+        // A closer point cannot lie farther horizontally than this known distance.
+        double bound = std::abs(a*u0*u0+b*u0+c-v0);
+        std::vector<double> intervals{u0-bound, u0+bound};
+        double A = 6*a*a, B = 6*a*b, C = 1+b*b+2*a*(c-v0);
+        double discriminant = B*B - 4*A*C;
+        if (discriminant > 0) {
+            double q = -0.5*(B + std::copysign(std::sqrt(discriminant), B));
+            for (double critical : {q/A, C/q})
+                if (critical > intervals[0] && critical < intervals[1]) intervals.push_back(critical);
+        }
+        std::sort(intervals.begin(), intervals.end());
+        u = u0;
+        double nearest = norm(point - position(u));
+        for (size_t i = 1; i < intervals.size(); ++i) {
+            double left = intervals[i-1], right = intervals[i];
+            double gl = slope_equation(left), gr = slope_equation(right);
+            if ((gl > 0 && gr > 0) || (gl < 0 && gr < 0)) continue;
+            if (gl == 0) right = left;
+            else if (gr == 0) left = right;
+            for (int step = 0; step < 60; ++step) {
+                double middle = (left+right)/2, gm = slope_equation(middle);
+                if (gm == 0) { left = right = middle; break; }
+                if ((gl <= 0 && gm <= 0) || (gl >= 0 && gm >= 0)) { left = middle; gl = gm; }
+                else right = middle;
+            }
+            double candidate = (left+right)/2, distance = norm(point-position(candidate));
+            if (distance < nearest) { nearest = distance; u = candidate; }
+        }
+    }
+    Vec delta = point-position(u);
+    return {u, std::copysign(norm(delta), dot(delta, normal(u)))};
+}
+
 std::optional<double> Curve::intersection(Vec p, Vec d, double start, double end) const {
     Vec local = p - origin;
     double u = dot(local, tangent), v = dot(local, outward);

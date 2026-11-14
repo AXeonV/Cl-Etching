@@ -14,7 +14,7 @@ inline double cosine_capture(double mu) { return mu; }
 class Reaction {
 public:
     virtual ~Reaction() = default;
-    virtual void apply(Grid& grid, int cell, double mu, Random& rng) = 0;
+    virtual void apply(Grid& grid, int cell, double mu, double capture_probability, Random& rng) = 0;
     virtual std::string name() const = 0;
     long long captures = 0, removed = 0, products_sicl4 = 0;
 };
@@ -22,12 +22,12 @@ class YieldReaction : public Reaction {
     AngularYield angular;
 public:
     explicit YieldReaction(AngularYield angular = cosine_yield) : angular(angular) {}
-    void apply(Grid& grid, int cell, double mu, Random& rng) override;
+    void apply(Grid& grid, int cell, double mu, double capture_probability, Random& rng) override;
     std::string name() const override { return "yield"; }
 };
 class ChlorinationReaction : public Reaction {
 public:
-    void apply(Grid& grid, int cell, double mu, Random& rng) override;
+    void apply(Grid& grid, int cell, double mu, double capture_probability, Random& rng) override;
     std::string name() const override { return "chlorination"; }
 };
 }

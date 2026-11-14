@@ -24,9 +24,3 @@ def inventory_errors(run):
     chlorine = (int((run["sites"] * np.arange(4)).sum()) + 4 * meta["sicl4_products"]
                 + meta["pruned_cl"] - meta["captures"]) if meta["model"] == "chlorination" else None
     return {"silicon": silicon, "chlorine": chlorine}
-
-
-def depth_profile(run):
-    meta = run["meta"]
-    solid = run["material"][meta["surface_z"]:] == 1
-    return np.where(solid.any(axis=0), np.argmax(solid, axis=0) * meta["cell_nm"], np.nan)

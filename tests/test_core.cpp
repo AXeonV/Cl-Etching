@@ -22,21 +22,39 @@ void angular_functions() {
     close(enhanced_yield(1), 1); close(enhanced_yield(0), 0);
     close(cosine_yield(0.5), 0.5); close(enhanced_yield(0.5), 2);
 }
-void yield_expectation() {
-    Random rng(8);
-    for (auto law : {cosine_yield, enhanced_yield}) {
-        Geometry g = small_geometry(); Grid grid(g); YieldReaction reaction(law);
-        double mu = 0.65;
-        int cell = grid.index(20, 20);
-        for (int i = 0; i < 200000; ++i) {
-            grid.sites[cell][0] = 30;
-            reaction.apply(grid, cell, mu, rng);
-        }
-        close(reaction.removed / 200000.0, law(mu), 0.015);
+// Restore inventory after each event so this integration test keeps a flat surface.
+class FixedSurfaceYield : public YieldReaction {
+public:
+    using YieldReaction::YieldReaction;
+    void apply(Grid& grid, int cell, double mu, double probability, Random& rng) override {
+        YieldReaction::apply(grid, cell, mu, probability, rng);
+        grid.sites[cell][0] = grid.geometry.atoms_per_cell;
     }
-    Grid grid(small_geometry()); YieldReaction reaction; int cell = grid.index(20, 20);
-    reaction.apply(grid, cell, 0, rng);
-    check(reaction.removed == 0, "zero angular yield is not divided by incidence cosine");
+};
+void yield_per_incident_ion() {
+    const double pi = std::acos(-1.0);
+    for (auto law : {cosine_yield, enhanced_yield}) {
+        for (double degrees : {0.0, 30.0, 60.0, 80.0}) {
+            for (bool fixed_capture : {false, true}) {
+                Geometry g = small_geometry(); g.opening = g.nx;
+                double angle = degrees*pi/180, mu = std::cos(angle);
+                CaptureProbability probability = fixed_capture
+                    ? CaptureProbability([](double) { return 0.4; }) : cosine_capture;
+                Simulation simulation(Settings{g}, Source{constant(angle),constant(100)},
+                                      std::make_unique<FixedSurfaceYield>(law), probability);
+                simulation.advance(100000);
+                close(simulation.reaction->removed / 100000.0, law(mu), 0.025);
+                check(simulation.stats.silicon_hits == 100000, "one hit per fixed-plane incident ion");
+                check(simulation.stats.deleted_cells == 0, "fixed-plane test does not change geometry");
+                check(simulation.transport.interior_exits == 0, "fixed-plane rays are intercepted");
+            }
+        }
+    }
+    Grid grid(small_geometry()); YieldReaction reaction(enhanced_yield); Random rng(8);
+    int cell = grid.index(20,20);
+    grid.sites[cell][0] = 1;
+    reaction.apply(grid, cell, 0.5, 0.5, rng);
+    check(grid.remaining(cell) == 0 && reaction.removed == 1, "removal is limited by cell inventory");
 }
 void source_distributions() {
     Random rng(42);
@@ -121,10 +139,10 @@ void chemistry_stoichiometry() {
     Grid grid(g); ChlorinationReaction reaction; Random rng(7);
     int cell = grid.index(20, 20);
     for (int state = 1; state <= 3; ++state) {
-        reaction.apply(grid, cell, 1, rng);
+        reaction.apply(grid, cell, 1, 1, rng);
         check(grid.sites[cell][state] == 1 && grid.remaining(cell) == 1, "single Cl advances one state");
     }
-    reaction.apply(grid, cell, 1, rng);
+    reaction.apply(grid, cell, 1, 1, rng);
     check(grid.remaining(cell) == 0 && reaction.removed == 1, "SiCl4 detachment");
     check(reaction.products_sicl4 == 1 && reaction.captures == 4, "four Cl per SiCl4");
 }
@@ -150,10 +168,75 @@ void fit_cache_updates() {
     grid.remove_empty_cell(20, 20); surface.invalidate(20, 20);
     surface.curve(20, 21); check(surface.fit_count > count, "refit changed boundary");
 }
+void curve_normal_distance() {
+    Curve flat{{0, 0}, {1, 0}, {0, 1}, 0, 0, 0};
+    close(flat.project({2, 3}).distance, 3);
+    close(flat.project({2, -3}).distance, -3);
+    Curve parabola{{0, 0}, {1, 0}, {0, 1}, 1, 0, 0};
+    auto projected = parabola.project({0, 2});
+    close(std::abs(projected.u), std::sqrt(1.5));
+    close(projected.distance, std::sqrt(1.75));
+    close(dot(Vec{0, 2}-parabola.position(projected.u),
+              unit(Vec{1, 2*projected.u})), 0);
+    close(parabola.project({1, 1}).distance, 0);
+    close(parabola.project({0, 0.5}).u, 0);
+    flat.a = 1e-18;
+    close(flat.project({2, 3}).u, 2);
+    close(flat.project({2, 3}).distance, 3);
+}
+void cell_removal_and_inventory_transfer() {
+    for (int x : {20, 0}) {
+        Geometry g = small_geometry(); g.opening = g.nx;
+        Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
+        int original = grid.index(x, 20), protrusion = grid.index(x-1, 19);
+        grid.sites[original] = {1, 1, 1, 1};
+        grid.material[protrusion] = Silicon;
+        std::array<uint16_t, 4> inventory{10, 4, 5, 6};
+        grid.sites[protrusion] = inventory;
+        grid.refresh(x, 20, 3);
+        long long si = grid.silicon_inventory(), cl = grid.chlorine_inventory();
+        surface.curve(x-1, 20); auto fits = surface.fit_count;
+        auto removal = updater.remove(x, 20);
+        check(removal.relocated && grid.index(removal.x, removal.z) == protrusion,
+              "remove protruding neighbor rather than create a hole beneath it");
+        check(grid.sites[original] == inventory && grid.material[original] == Silicon,
+              "transfer all four chlorination states into the underfilled cell");
+        check(grid.material[protrusion] == Gas && grid.remaining(protrusion) == 0,
+              "selected protrusion becomes gas");
+        check(grid.silicon_inventory()+4 == si && grid.chlorine_inventory()+6 == cl,
+              "only the original subthreshold residual leaves the inventory");
+        surface.curve(x-1, 20);
+        check(surface.fit_count > fits, "invalidate fits around the actual removal location");
+        for (int z = 18; z <= 22; ++z) for (int dx = -2; dx <= 2; ++dx) {
+            int xx = x+dx, cell = grid.index(xx,z);
+            bool boundary = grid.at(xx,z) != Gas && (grid.at(xx-1,z)==Gas || grid.at(xx+1,z)==Gas
+                || grid.at(xx,z-1)==Gas || grid.at(xx,z+1)==Gas);
+            check(grid.boundary[cell] == boundary, "refresh the selected cell's neighborhood");
+        }
+    }
+}
+void flat_removal_and_fixed_mask() {
+    Geometry g = small_geometry(); g.opening = g.nx;
+    Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
+    grid.sites[grid.index(20,20)] = {};
+    auto removal = updater.remove(20,20);
+    check(!removal.relocated && removal.x == 20 && removal.z == 20,
+          "flat surface advances at the underfilled cell");
+    Grid masked(g); int mask = masked.index(19,19);
+    masked.material[mask] = Mask; masked.refresh(20,20,3);
+    Surface masked_surface(masked); CellUpdater masked_updater(masked,masked_surface);
+    masked.sites[masked.index(20,20)] = {};
+    masked_updater.remove(20,20);
+    check(masked.material[mask] == Mask, "fixed mask is not a silicon removal candidate");
+}
+
 int main() {
     std::cout << std::unitbuf;
     std::vector<std::pair<std::string, std::function<void()>>> tests = {
-        {"angular functions", angular_functions}, {"yield after surface capture", yield_expectation},
+        {"normal distance to quadratic curve", curve_normal_distance},
+        {"cell removal and inventory transfer", cell_removal_and_inventory_transfer},
+        {"flat removal and fixed mask", flat_removal_and_fixed_mask},
+        {"angular functions", angular_functions}, {"yield per incident ion including capture and reflection", yield_per_incident_ion},
         {"source distribution moments", source_distributions}, {"curve intersection and derivative", curve_intersection},
         {"fitted flat surface", fitted_flat_surface}, {"vertical fit and secondary collision", vertical_wall_and_second_hit},
         {"specular reflection", reflection_geometry}, {"single Cl stoichiometry", chemistry_stoichiometry},

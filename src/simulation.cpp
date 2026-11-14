@@ -7,6 +7,7 @@
 namespace etch {
 Simulation::Simulation(Settings s, Source src, std::unique_ptr<Reaction> rx, CaptureProbability p)
     : settings(s), grid(s.geometry), surface(grid, s.fit_radius), transport(grid, surface),
+      cell_updater(grid, surface),
       source(std::move(src)), capture(std::move(p)), reaction(std::move(rx)),
       source_rng(s.seed), event_rng(s.seed + 1000003), primary_hits(grid.material.size()),
       secondary_hits(grid.material.size()), initial_si(grid.silicon_inventory()) {}
@@ -23,28 +24,27 @@ void Simulation::advance(long long count) {
             }
             int cell = grid.index(hit->x, hit->z);
             double mu = -dot(particle.direction, hit->normal);
-            bool reflect = false;
             if (grid.material[cell] == Mask) {
                 ++stats.mask_hits;
-                reflect = true;
             } else {
                 ++stats.silicon_hits;
                 (bounce == 0 ? primary_hits : secondary_hits)[cell]++;
-                if (uniform(event_rng) < capture(mu)) {
-                    reaction->apply(grid, cell, mu, event_rng);
+                double probability = capture(mu);
+                if (uniform(event_rng) < probability) {
+                    reaction->apply(grid, cell, mu, probability, event_rng);
                     if (grid.remaining(cell) < grid.geometry.deletion_threshold) {
-                        stats.pruned_si += grid.remaining(cell);
-                        for (int state = 1; state < 4; ++state) stats.pruned_cl += state * grid.sites[cell][state];
-                        grid.sites[cell] = {};
-                        grid.remove_empty_cell(hit->x, hit->z);
-                        surface.invalidate(hit->x, hit->z);
+                        auto removal = cell_updater.remove(hit->x, hit->z);
+                        for (int state = 0; state < 4; ++state) {
+                            stats.pruned_si += removal.residual[state];
+                            stats.pruned_cl += state * removal.residual[state];
+                        }
+                        stats.relocated_cells += removal.relocated;
                         ++stats.deleted_cells;
                     }
                     break;
                 }
-                reflect = true;
             }
-            if (!reflect || !settings.reflections) break;
+            if (!settings.reflections) break;
             if (settings.max_bounces > 0 && bounce == settings.max_bounces) { ++stats.bounce_limit; break; }
             particle.position = hit->position + hit->normal * 1e-5;
             particle.position.x -= grid.geometry.nx * std::floor(particle.position.x / grid.geometry.nx);
@@ -96,6 +96,7 @@ void Simulation::save(const std::string& directory, double elapsed_seconds) {
       << "  \"sicl4_products\": " << reaction->products_sicl4 << ",\n"
       << "  \"initial_si\": " << initial_si << ", \"remaining_si\": " << grid.silicon_inventory() << ",\n"
       << "  \"surface_cl\": " << grid.chlorine_inventory() << ",\n"
+      << "  \"relocated_cells\": " << stats.relocated_cells << ",\n"
       << "  \"deleted_cells\": " << stats.deleted_cells << ", \"fits\": " << surface.fit_count << ",\n"
       << "  \"elapsed_seconds\": " << elapsed_seconds << "\n}\n";
 }
