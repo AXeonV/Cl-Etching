@@ -26,10 +26,11 @@ flowchart LR
     Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应模型、固相位点与材料类型"]
     Common --> Random["random.hpp<br/>随机数与标量分布"]
     Common --> Linear["linear.hpp<br/>最小二乘求解"]
+    Common --> Geometry["implicit.hpp · periodic.hpp<br/>Hermite 重建、区间求根与周期判定"]
     Common --> Output["output.hpp<br/>数组与统计输出"]
 
     Planar --> PlanarGrid["grid.hpp/.cpp<br/>二维网格与四邻接边界"]
-    Planar --> PlanarSurface["surface.hpp/.cpp<br/>局部二次曲线、法线与交点计算"]
+    Planar --> PlanarSurface["surface.hpp/.cpp<br/>局部二次曲线与连续隐式表面"]
     Planar --> PlanarTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
     Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>八邻域删格与库存迁移"]
     Planar --> PlanarSource["source.hpp<br/>二维发射角与线粒子源"]
@@ -37,7 +38,7 @@ flowchart LR
     Planar --> PlanarBackend["backend.hpp · output.cpp<br/>后端组件装配与二维几何输出"]
 
     Spatial --> SpatialGrid["grid.hpp/.cpp<br/>三维网格与六邻接边界"]
-    Spatial --> SpatialSurface["surface.hpp/.cpp<br/>局部二次曲面、法线与交点计算"]
+    Spatial --> SpatialSurface["surface.hpp/.cpp<br/>局部二次曲面与连续隐式表面"]
     Spatial --> SpatialTransport["transport.hpp/.cpp · traversal.hpp<br/>体素遍历、射线追踪与反应元胞定位"]
     Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>二十六邻域删格与库存迁移"]
     Spatial --> SpatialSource["source.hpp<br/>立体角分布与面粒子源"]
@@ -46,8 +47,10 @@ flowchart LR
 
     Utils --> Build["build.py<br/>编译与测试入口"]
     Utils --> Results["results.py<br/>结果读取与库存核对"]
-    Utils --> Plot["plot.py · volume.py<br/>截面与体素剖视图"]
+    Utils --> Plot["plot.py · volume.py · surface.py<br/>碰撞表面、截面与体素剖视图"]
 
+    Tests --> NumericalTests["common/<br/>插值连续性、解析曲面与多根检查"]
+    Tests --> TrackingTests["test_tracking.cpp<br/>反向追踪与几何缓存一致性"]
     Tests --> PlanarTests["planar/<br/>二维核心与几何回归测试"]
     Tests --> SpatialTests["spatial/<br/>三维曲面、追踪与库存测试"]
     Tests --> CliTests["test_cli.py<br/>维度入口与输出格式测试"]
@@ -178,22 +181,35 @@ $$
 w=f(u,v)=au^2+bv^2+cuv+du+ev+f_0.
 $$
 
-三维法线由两个偏导数计算：
+局部二次曲面的法线由两个偏导数计算：
 
 $$
 \mathbf n=\frac{\mathbf e_w-f_u\mathbf e_u-f_v\mathbf e_v}
 {\lVert\mathbf e_w-f_u\mathbf e_u-f_v\mathbf e_v\rVert}.
 $$
 
-**碰撞位置和反射法线都由局部拟合决定。** 轨迹采用覆盖网格角点的 DDA 遍历；每段检索附近拟合片，在局部邻域及采样点的切向覆盖范围内选择最近的前向交点。二维求直线与曲线交点，三维将射线代入曲面得到一元二次方程。由拟合面的导数计算法线，粒子从该交点按镜面方向继续运动：
+局部二次拟合通过共享节点构成连续的隐式碰撞表面。二维局部函数取 $q_i=v-f(u)$，三维取 $q_i=w-f(u,v)$，正值表示气体侧。重建节点通过紧支撑单位分解合并邻近的 $q_i$，保存合并函数值、一阶导数和各轴混合导数。各轴窗口为 $w(t)=(1-t^2)^4$（$|t|<1$），其中 $t$ 是节点到拟合中心的坐标差除以拟合支撑半宽。周期轴的支撑不超过半个周期。合并函数为 $g=\sum_i w_iq_i/\sum_i w_i$，导数同时包含窗口变化。无拟合支持的节点由材料标签确定符号，函数幅值为拟合半径加一，导数为零。
+
+节点数据通过二维双三次、三维三次张量积 Hermite 插值连接。相邻重建单元共用节点值与导数，使函数及一阶导数连续，碰撞表面定义为：
 
 $$
-\mathbf d'=\mathbf d-2(\mathbf d\cdot\mathbf n)\mathbf n.
+\Phi(\mathbf{x})=0,\qquad
+\mathbf{n}=\frac{\nabla\Phi(\mathbf{x})}{\lVert\nabla\Phi(\mathbf{x})\rVert}.
 $$
 
-反应元胞按刘婉第 3.5 节定位：若交点所在格是表面元胞，直接使用该格；否则沿交点法线的两个方向查找局部邻域内最近的表面元胞。
+**碰撞位置和反射法线均由这一重建表面决定。** 局部二次拟合还用于元胞更新的距离与法线评分。`--surface-subdivisions` 指定每个元胞沿各轴的几何细分数，默认为 1；重建间距为元胞边长除以此值，材料元胞及其库存不随几何细分改变。
 
-拟合结果与候选表面元胞列表分别缓存。三维拟合片按表面元胞稀疏保存。元胞删除后更新受影响的拟合与候选列表；仅库存或氯化状态改变时复用几何缓存。
+轨迹采用覆盖网格角点的 DDA 遍历。将射线代入当前重建单元的隐式函数后，二维得到最高六次、三维得到最高九次的一元多项式。用导数的根划分单调区间，再在变号区间二分求根，选取最近的气体侧进入固体侧的交点。Bernstein 系数界用于排除不含零点的单元。粒子从交点按镜面方向继续运动：
+
+$$
+\mathbf{d}'=\mathbf{d}-2(\mathbf{d}\cdot\mathbf{n})\mathbf{n}.
+$$
+
+反应元胞按刘婉第 3.5 节定位：若交点所在格是表面元胞，直接使用该格；否则优先选择交点法线穿过的最近表面元胞。法线未穿过任何表面元胞时，在局部支撑内按元胞中心到法线的垂直距离选取最近者，等距时选沿法线方向距离交点更近的元胞。
+
+局部拟合、重建节点、Hermite 系数与候选表面元胞列表分别缓存。元胞删除后，使所有依赖该处几何的缓存同步失效；仅库存或氯化状态改变时复用几何缓存。
+
+水平射线在周期区域中回到相同位置与方向、且整周期没有碰撞时，结束该粒子的追踪。若水平截面的函数界已能排除任何穿越，也直接结束追踪。周期判定使用方向浮点数的二进制有效数计算共同周期，不设置角度容差或任意的路径长度上限。
 
 ## 构建和测试
 
@@ -234,17 +250,19 @@ python -m utils.volume RUN_A RUN_B RUN_C --output volume.png
 
 ## 输出与诊断
 
-`summary.json`、`arguments.txt` 和原始数组保存输入、库存和轨迹统计。`dimension` 标识维度，三维额外保存 `ny`、`opening_y_cells`。`surface.csv` 在二维保存曲线系数和局部坐标轴，在三维保存曲面的六个系数及三个局部坐标轴。
+`summary.json`、`arguments.txt` 和原始数组保存输入、库存和轨迹统计。`dimension` 标识维度，三维额外保存 `ny`、`opening_y_cells`。`surface.csv` 保存局部二次拟合的系数与坐标轴。`surface_nodes.bin` 保存连续碰撞表面的节点函数值及混合导数，按 z、y（三维）、x、导数掩码排列，各轴节点数为元胞数乘以几何细分数再加一。`collision_angles.csv` 按 1° 区间记录首次撞击、反射后撞击、捕获与反应去除数；角度均相对于碰撞点的局部法线。
 
 - `deleted_cells`：删除的元胞数。
 - `relocated_cells`：选择邻格删除并转移库存的次数。
 - `pruned_si`、`pruned_cl`：阈值删格残量。
 - `interior_exits`：未找到曲线碰撞却从硅片底部离开的漏检轨迹数。
 - `normal_mapped_hits`：交点经过法线投影定位反应元胞的次数。
-- `mapping_failures`：找到交点后无法定位反应元胞的候选次数。
-- `no_local_intersections`：局部拟合没有有效前向交点的候选次数，包含反射后离开原表面的情况。
+- `off_normal_mapped_hits`：法线未穿过表面元胞、通过最近法线距离完成定位的次数。
+- `max_mapping_offset_cells`：上述定位中元胞中心到法线的最大垂直距离，以元胞边长为单位。
+- `mapping_failures`：重建表面的交点无法沿法线定位反应元胞的次数。
+- `periodic_orbits`：闭合周期路径或无可碰撞水平截面结束的粒子数。
 - `rank_deficient_fits`：局部拟合矩阵不满秩的次数。
-- `undefined_normal_fits`：邻域质心与目标中心重合、无法定义旋转轴的拟合次数；对应元胞保留库存，暂不参与拟合面碰撞。
+- `undefined_normal_fits`：邻域质心与目标中心重合、无法定义旋转轴的拟合次数；对应局部拟合不提供重建节点数据，材料标签仍参与气固区域定义。
 
 ## 扩展
 

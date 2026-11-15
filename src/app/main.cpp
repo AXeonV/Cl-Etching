@@ -37,6 +37,7 @@ spatial::Source spatial_source(const Arguments& args) {
 template<class Backend> void run(typename Backend::Geometry geometry,typename Backend::Source source,Arguments& args) {
     RunSettings<typename Backend::Geometry> settings{geometry};
     settings.seed=std::stoull(args.at("--seed"));settings.reflections=std::stoi(args.at("--reflect"));
+    settings.surface_subdivisions=std::stoi(args.at("--surface-subdivisions"));
     settings.max_bounces=std::stoi(args.at("--max-bounces"));
     Engine<Backend> simulation(settings,source,reaction(args));
     auto start=std::chrono::steady_clock::now();

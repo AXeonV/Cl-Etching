@@ -10,6 +10,12 @@ void Backend::write_surface(Surface& surface,const Grid& grid,const std::string&
             <<s.a<<','<<s.b<<','<<s.c<<','<<s.d<<','<<s.e<<','<<s.f<<','<<cell<<'\n';
     }
 }
+void Backend::write_field(Surface& surface,const Grid& grid,const std::string& path) {
+    std::ofstream file(path,std::ios::binary);int n=surface.resolution();
+    for(int z=0;z<=grid.geometry.nz*n;++z)for(int y=0;y<=grid.geometry.ny*n;++y)for(int x=0;x<=grid.geometry.nx*n;++x) {
+        auto node=surface.node(x,y,z);file.write(reinterpret_cast<const char*>(node.data()),sizeof(node));
+    }
+}
 void Backend::write_geometry(Summary& out,const Geometry& g) {
     out.field("dimension",3);out.field("nx",g.nx);out.field("ny",g.ny);out.field("nz",g.nz);
     out.field("cell_nm",g.cell_nm);out.field("surface_z",g.surface_z);

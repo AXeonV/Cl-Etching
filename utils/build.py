@@ -14,8 +14,10 @@ def build(target="simulation"):
     BUILD.mkdir(exist_ok=True)
     sources, name = {
         "simulation": ([*COMMON, *PLANAR, *SPATIAL, *ROOT.glob("src/app/*.cpp")], "etch_sim.exe"),
+        "numerics": ([*COMMON, ROOT / "tests/common/test_numerics.cpp"], "etch_numerics_tests.exe"),
         "planar": ([*COMMON, *PLANAR, ROOT / "tests/planar/test_core.cpp"], "etch_tests.exe"),
         "spatial": ([*COMMON, *SPATIAL, ROOT / "tests/spatial/test_core.cpp"], "etch_spatial_tests.exe"),
+        "tracking": ([*COMMON, *PLANAR, *SPATIAL, ROOT / "tests/test_tracking.cpp"], "etch_tracking_tests.exe"),
         "geometry": ([*COMMON, *PLANAR, ROOT / "tests/planar/test_geometry.cpp"], "etch_geometry_tests.exe"),
     }[target]
     executable = BUILD / name
@@ -31,5 +33,5 @@ if __name__ == "__main__":
     parser.add_argument("--geometry", action="store_true")
     args = parser.parse_args()
     print(build())
-    for target in ["planar", "spatial", *(["geometry"] if args.geometry else [])]:
+    for target in ["numerics", "planar", "spatial", *(["geometry", "tracking"] if args.geometry else [])]:
         subprocess.run([str(build(target))], check=True)

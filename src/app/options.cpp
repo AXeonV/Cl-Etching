@@ -4,7 +4,7 @@ Arguments parse(int argc,char** argv) {
     Arguments args={
         {"--dimension","2"},{"--model","yield"},{"--angular","cosine"},{"--angle","gaussian"},
         {"--energy","constant"},{"--seed","42"},{"--output","outputs/run"},
-        {"--reflect","1"},{"--max-bounces","0"},{"--nx",""},{"--ny",""},{"--nz",""},
+        {"--surface-subdivisions","1"},{"--reflect","1"},{"--max-bounces","0"},{"--nx",""},{"--ny",""},{"--nz",""},
         {"--surface-z",""},{"--opening",""},{"--opening-y",""},{"--mask-thickness",""},
         {"--particles",""},{"--fwhm",""},{"--energy-ev",""},{"--energy-sigma",""}
     };

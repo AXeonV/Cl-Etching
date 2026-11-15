@@ -12,6 +12,7 @@ from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 import numpy as np
 from utils.results import load_run
+from utils.surface import section as surface_section
 
 
 def plot_runs(directories, output, slice_y=None):
@@ -37,8 +38,11 @@ def plot_runs(directories, output, slice_y=None):
                   (m["nz"] - m["surface_z"]) * m["cell_nm"], -m["surface_z"] * m["cell_nm"]]
         ax.imshow(section, cmap=ListedColormap(["white", "#dce8ee", "#283a4b"]),
                   vmin=0, vmax=2, extent=extent, interpolation="nearest")
+        if "surface_nodes" in run:
+            x, z, field = surface_section(run, slice_y)
+            ax.contour(x, z, field, levels=[0], colors=[color], linewidths=0.75)
         segments = []
-        for row in (run["curves"] if m.get("dimension", 2) == 2 else []):
+        for row in (run["curves"] if m.get("dimension", 2) == 2 and "surface_nodes" not in run else []):
             x, z, tx, tz, nx, nz, a, b, c, _ = row
             u = np.linspace(-np.sqrt(2), np.sqrt(2), 41)
             v = a*u*u + b*u + c
@@ -64,8 +68,8 @@ def plot_runs(directories, output, slice_y=None):
     figure.suptitle("Material geometry and surface profiles", fontsize=15)
     handles = [Patch(facecolor="#dce8ee", label="Si cells"),
                Patch(facecolor="#283a4b", label="Fixed mask")]
-    if any(run["meta"].get("dimension", 2) == 2 for run in runs):
-        handles.append(Line2D([0], [0], color="#007f9b", label="Local fitted collision curves"))
+    if any("surface_nodes" in run or run["meta"].get("dimension", 2) == 2 for run in runs):
+        handles.append(Line2D([0], [0], color="#007f9b", label="Collision surface"))
     figure.legend(handles=handles, loc="outside lower center", ncol=len(handles), frameon=False, fontsize=9)
     figure.savefig(output, dpi=160)
     plt.close(figure)

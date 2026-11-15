@@ -1,4 +1,5 @@
 #include "transport.hpp"
+#include "common/implicit.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -48,7 +49,7 @@ std::optional<Interval> local_interval(Vec p, Vec d, Vec center, double half_wid
 }
 }
 
-std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_origin) const {
+std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_origin) {
     int x = static_cast<int>(std::floor(point.x)), z = static_cast<int>(std::floor(point.z));
     if (z >= 0 && z < grid.geometry.nz && grid.boundary[grid.index(x, z)])
         return Cell{grid.wrap(x), z};
@@ -70,48 +71,47 @@ std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_orig
             walk.advance();
         }
     }
+    if(mapped)return mapped;
+    // A fitted normal need not pass through a boundary voxel. Complete the discrete
+    // projection by choosing the closest surface-cell center to the normal line.
+    double transverse=infinity,along=infinity;
+    for(int cell:surface.candidates(x,z)) {
+        Vec center{cell%grid.geometry.nx+0.5,cell/grid.geometry.nx+0.5};
+        center.x+=grid.geometry.nx*std::round((point.x-center.x)/grid.geometry.nx);
+        Vec offset=center-point;double distance=dot(offset,normal);
+        double error=std::max(0.0,dot(offset,offset)-distance*distance);
+        if(error<transverse||(error==transverse&&std::abs(distance)<along)) {
+            transverse=error;along=std::abs(distance);mapped=Cell{cell%grid.geometry.nx,cell/grid.geometry.nx};
+        }
+    }
+    if(mapped){++off_normal_mapped_hits;max_mapping_offset=std::max(max_mapping_offset,std::sqrt(transverse));}
     return mapped;
 }
 
 std::optional<Hit> Transport::next_hit(const Particle& particle) {
-    Vec p=particle.position, d=particle.direction;
-    int nx=grid.geometry.nx, nz=grid.geometry.nz;
-    GridWalk walk(p,d);
-    while (walk.z>=0 && walk.z<nz) {
-        double nearest=infinity;
-        std::optional<Hit> closest;
-        // Enumerate every fitted patch whose support can overlap this ray segment.
-        for (int cell : surface.candidates(walk.x,walk.z)) {
-            int x=cell%nx, z=cell/nx;
-            Curve curve=surface.curve(x,z);
-            if (!curve.defined) continue;
-            curve.origin.x += nx*std::round((walk.x+0.5-curve.origin.x)/nx);
-            auto interval=local_interval(p,d,curve.origin,surface.fit_radius()+0.5);
-            if (!interval) continue;
-            double start=std::max({1e-8,walk.entry,interval->first});
-            double end=std::min({walk.tx,walk.tz,interval->last});
-            if (start>end) continue;
-            auto distance=curve.intersection(p,d,start,end);
-            if (!distance) { ++no_local_intersections; continue; }
-            if (*distance>=nearest) continue;
-            Vec point=p+d*(*distance);
-            Vec normal=curve.normal(dot(point-curve.origin,curve.tangent));
-            auto mapped=reaction_cell(point,normal,curve.origin);
-            if (!mapped) { ++mapping_failures; continue; }
-            nearest=*distance; closest=Hit{point,normal,grid.index(mapped->x,mapped->z)};
-        }
-        if (closest) {
-            if (grid.index(static_cast<int>(std::floor(closest->position.x)),
-                           static_cast<int>(std::floor(closest->position.z)))!=closest->cell) ++normal_mapped_hits;
-            return closest;
+    Vec p=particle.position,d=particle.direction;int n=surface.resolution();GridWalk walk(p*n,d*n);int nz=grid.geometry.nz*n;
+    while(walk.z>=0&&walk.z<nz) {
+        double start=walk.entry,end=std::min(walk.tx,walk.tz);
+        if(end>start) {
+            const auto& field=surface.field(walk.x,walk.z);
+            Vec a=(p+d*start)*n-Vec{double(walk.x),double(walk.z)},b=(p+d*end)*n-Vec{double(walk.x),double(walk.z)};
+            for(double root:field.intersections({a.x,a.z},{b.x,b.z})) {
+                double t=start+(end-start)*root;if(t<1e-8)continue;
+                Vec point=p+d*t,relative=point*n-Vec{double(walk.x),double(walk.z)};
+                auto gradient=field.gradient({relative.x,relative.z});Vec n{gradient[0],gradient[1]};
+                if(norm(n)==0)continue;
+                Vec normal=unit(n);if(dot(d,normal)>=-1e-10)continue;auto owner=reaction_cell(point,normal,point);
+                if(!owner){++mapping_failures;continue;}
+                int cell=grid.index(owner->x,owner->z);
+                if(grid.index(int(std::floor(point.x)),int(std::floor(point.z)))!=cell)++normal_mapped_hits;
+                return Hit{point,normal,cell};
+            }
         }
         walk.advance();
-        if (d.z==0 && walk.entry>=nx) {
-            ++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;
-        }
+        if(d.z==0&&walk.entry>=grid.geometry.nx){++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
     }
     last_end=walk.z>=nz?RayEnd::MissedSurface:RayEnd::Escaped;
-    if (last_end==RayEnd::MissedSurface) ++interior_exits;
+    if(last_end==RayEnd::MissedSurface)++interior_exits;
     return std::nullopt;
 }
 }

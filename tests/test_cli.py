@@ -35,6 +35,7 @@ class CommandLineTests(unittest.TestCase):
                         if model == "chlorination":
                             self.assertEqual(inventory_errors(run)["chlorine"], 0)
                         self.assertTrue(np.isfinite(run["curves"]).all())
+                        self.assertTrue(np.isfinite(run["surface_nodes"]).all())
                         self.assertEqual(run["curves"].shape[1], 19 if dimension == 3 else 10)
 
     def test_spatial_distribution_options(self):
@@ -42,9 +43,21 @@ class CommandLineTests(unittest.TestCase):
             for angle in ["normal", "cosine", "gaussian"]:
                 with self.subTest(angle=angle):
                     run = self.run_case(3, "yield", Path(temporary) / angle,
-                                        options=("--angle", angle, "--energy", "gaussian", "--energy-sigma", "5"))
+                                        options=("--angle", angle, "--energy", "gaussian", "--energy-sigma", "5", "--surface-subdivisions", "2"))
                     self.assertEqual(inventory_errors(run)["silicon"], 0)
                     self.assertTrue(np.isfinite(run["curves"]).all())
+
+    def test_saved_collision_field_matches_flat_plane(self):
+        from utils.surface import evaluate
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
+            for dimension in [2, 3]:
+                run = self.run_case(dimension, "yield", Path(temporary) / str(dimension),
+                                    options=("--particles", "0", "--opening", "24", "--opening-y", "12",
+                                             "--surface-subdivisions", "2"))
+                z = np.linspace(16.1, 16.9, 9)
+                coordinates = (12.37, z) if dimension == 2 else (12.37, 6.25, z)
+                np.testing.assert_allclose(evaluate(run["surface_nodes"], coordinates, 0.5),
+                                           16.5 - z, atol=1e-11)
 
     def test_legacy_arguments_default_to_planar(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:

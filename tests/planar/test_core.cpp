@@ -72,14 +72,11 @@ void source_distributions() {
     close(sum2 / 100000, sigma * sigma, 0.0001);
     close(cosine_sin2 / 100000, 1.0 / 3, 0.005);
 }
-void curve_intersection() {
+void curve_geometry() {
     Curve flat{{0, 5}, {1, 0}, {0, -1}, 0, 0, 0};
-    auto hit = flat.intersection({0, 0}, {0, 1}, 0, 10);
-    check(hit.has_value(), "flat curve hit"); close(*hit, 5);
-    check(!flat.intersection({0, 0}, {0, -1}, 0, 10), "backward root rejected");
+    close(norm(flat.position(2)-Vec{2,5}),0);
     Curve parabola{{0, 5}, {1, 0}, {0, -1}, 0.2, 0, 0};
-    auto curved_hit = parabola.intersection({0.5, 0}, {0, 1}, 0, 10);
-    check(curved_hit.has_value(), "quadratic hit"); close(*curved_hit, 4.95);
+    close(norm(parabola.position(0.5)-Vec{0.5,4.95}),0);
     Vec n = parabola.normal(0.5);
     close(n.x, -0.2 / std::sqrt(1.04)); close(n.z, -1 / std::sqrt(1.04));
 }
@@ -145,6 +142,9 @@ void surface_cell_mapping() {
     check(gas && gas->x == 20 && gas->z == 20, "gas intersection maps inward along normal");
     auto interior = transport.reaction_cell({20.7, 21.2}, {0, -1}, origin);
     check(interior && interior->x == 20 && interior->z == 20, "interior intersection maps outward along normal");
+    auto closest = transport.reaction_cell({20.7,19.7},{1,0},{20.5,19.7});
+    check(closest && closest->z == 20 && transport.off_normal_mapped_hits == 1,
+          "a normal that misses all cells maps to the closest surface cell to its line");
     auto unmapped = transport.reaction_cell({20.7, 10}, {1, 0}, {20.5, 10});
     check(!unmapped, "no arbitrary owner is substituted when the normal misses the surface");
 }
@@ -153,12 +153,6 @@ void periodic_cell_mapping() {
     Grid grid(g); Surface surface(grid); Transport transport(grid, surface);
     auto cell = transport.reaction_cell({-0.2, 20.5}, {0, -1}, {-0.5, 20.5});
     check(cell && cell->x == g.nx - 1 && cell->z == 20, "periodic point maps to wrapped cell");
-}
-void curve_support_is_set_by_the_tracer() {
-    Curve flat{{0, 5}, {1, 0}, {0, -1}, 0, 0, 0};
-    auto hit = flat.intersection({2, 0}, {0, 1}, 0, 10);
-    check(hit.has_value(), "valid roots are not discarded by an extra one-cell clipping box");
-    close(*hit, 5);
 }
 void chemistry_stoichiometry() {
     Geometry g = small_geometry(); g.atoms_per_cell = 1;
@@ -279,13 +273,12 @@ int main() {
         {"cell removal and inventory transfer", cell_removal_and_inventory_transfer},
         {"flat removal and fixed mask", flat_removal_and_fixed_mask},
         {"angular functions", angular_functions}, {"yield per incident ion including capture and reflection", yield_per_incident_ion},
-        {"source distribution moments", source_distributions}, {"curve intersection and derivative", curve_intersection},
+        {"source distribution moments", source_distributions}, {"local quadratic geometry", curve_geometry},
         {"fitted flat surface", fitted_flat_surface}, {"vertical fit and secondary collision", vertical_wall_and_second_hit},
         {"V-groove reflection and reverse path", v_groove_reflection_and_reverse_path},
         {"specular reflection", reflection_geometry}, {"single Cl stoichiometry", chemistry_stoichiometry},
         {"inventory and seed", inventories_and_repeatability}, {"fit cache update", fit_cache_updates},
-        {"reaction-cell normal mapping", surface_cell_mapping}, {"periodic cell mapping", periodic_cell_mapping},
-        {"curve intersection support", curve_support_is_set_by_the_tracer}
+        {"reaction-cell normal mapping", surface_cell_mapping}, {"periodic cell mapping", periodic_cell_mapping}
     };
     int failed = 0;
     for (auto& [name, test] : tests) {

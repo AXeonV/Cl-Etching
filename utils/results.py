@@ -9,7 +9,7 @@ def load_run(directory):
     meta = json.loads((directory / "summary.json").read_text())
     shape = ((meta["nz"], meta["ny"], meta["nx"]) if meta.get("dimension", 2) == 3
              else (meta["nz"], meta["nx"]))
-    return {
+    run = {
         "directory": directory, "meta": meta,
         "material": np.fromfile(directory / "material.bin", dtype="u1").reshape(shape),
         "sites": np.fromfile(directory / "sites.bin", dtype="<u2").reshape(*shape, 4),
@@ -17,6 +17,13 @@ def load_run(directory):
         "secondary": np.fromfile(directory / "secondary_hits.bin", dtype="<u4").reshape(shape),
         "curves": np.loadtxt(directory / "surface.csv", delimiter=",", skiprows=1, ndmin=2),
     }
+
+    field = directory / "surface_nodes.bin"
+    if field.exists():
+        resolution = meta["surface_subdivisions"]
+        field_shape = tuple(size * resolution + 1 for size in shape)
+        run["surface_nodes"] = np.fromfile(field, dtype="<f8").reshape(*field_shape, 1 << len(shape))
+    return run
 
 
 def inventory_errors(run):

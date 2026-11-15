@@ -14,6 +14,7 @@ struct Backend {
     using CellUpdater=spatial::CellUpdater;
     using Source=spatial::Source;
     static void write_surface(Surface& surface,const Grid& grid,const std::string& path);
+    static void write_field(Surface& surface,const Grid& grid,const std::string& path);
     static void write_geometry(Summary& out,const Geometry& geometry);
 };
 using Settings=RunSettings<Geometry>;

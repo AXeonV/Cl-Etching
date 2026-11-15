@@ -38,50 +38,9 @@ Projection Patch::project(Vec point) const {
     Vec delta=point-position(best_u,best_v);
     return {best_u,best_v,std::copysign(std::sqrt(best),dot(delta,normal(best_u,best_v)))};
 }
-std::optional<double> Patch::intersection(Vec p,Vec direction,double start,double end) const {
-    Vec q=p-origin;
-    double u=dot(q,u_axis),v=dot(q,v_axis),w=dot(q,outward);
-    double du=dot(direction,u_axis),dv=dot(direction,v_axis),dw=dot(direction,outward);
-    double A=a*du*du+b*dv*dv+c*du*dv;
-    double B=2*a*u*du+2*b*v*dv+c*(u*dv+v*du)+d*du+e*dv-dw;
-    double C=height(u,v)-w;
-    double roots[2];int count=0;
-    if(std::abs(A)<1e-12) { if(std::abs(B)>1e-12)roots[count++]=-C/B; }
-    else {
-        double discriminant=B*B-4*A*C;
-        if(discriminant>=0) {
-            double qroot=-0.5*(B+std::copysign(std::sqrt(discriminant),B));
-            roots[count++]=qroot/A;
-            if(std::abs(qroot)>1e-15)roots[count++]=C/qroot;
-        }
-    }
-    double nearest=std::numeric_limits<double>::infinity();
-    for(int i=0;i<count;++i) {
-        double t=roots[i],uu=u+du*t,vv=v+dv*t;
-        if(t>=start && t<=end && uu>=u_min && uu<=u_max && vv>=v_min && vv<=v_max
-           && dot(direction,normal(uu,vv))<-1e-9)nearest=std::min(nearest,t);
-    }
-    if(std::isfinite(nearest))return nearest;
-    return std::nullopt;
+Surface::Surface(Grid& g,int r,int n):grid(g),radius(r),subdivisions(n),nearby_cells(g.material.size()),dirty_candidates(g.material.size(),1) {
+    node_values.resize(g.geometry.nx*n*g.geometry.ny*n*(g.geometry.nz*n+1));dirty_nodes.assign(node_values.size(),1);
 }
-std::pair<double,double> Patch::z_bounds() const {
-    double A=outward.z*a,B=outward.z*b,C=outward.z*c;
-    double D=u_axis.z+outward.z*d,E=v_axis.z+outward.z*e,F=origin.z+outward.z*f;
-    double low=std::numeric_limits<double>::infinity(),high=-low;
-    auto sample=[&](double u,double v) {
-        if(u<u_min||u>u_max||v<v_min||v>v_max)return;
-        double value=A*u*u+B*v*v+C*u*v+D*u+E*v+F;
-        low=std::min(low,value);high=std::max(high,value);
-    };
-    for(double u:{u_min,u_max})for(double v:{v_min,v_max})sample(u,v);
-    if(B!=0)for(double u:{u_min,u_max})sample(u,-(C*u+E)/(2*B));
-    if(A!=0)for(double v:{v_min,v_max})sample(-(C*v+D)/(2*A),v);
-    double determinant=4*A*B-C*C;
-    if(determinant!=0)sample((C*E-2*B*D)/determinant,(C*D-2*A*E)/determinant);
-    return {low,high};
-}
-
-Surface::Surface(Grid& g,int r):grid(g),radius(r),nearby_cells(g.material.size()),dirty_candidates(g.material.size(),1) {}
 const Patch& Surface::patch(int x,int y,int z) {
     int cell=grid.index(x,y,z);auto found=patches.find(cell);
     if(found!=patches.end())return found->second;
@@ -102,13 +61,9 @@ const Patch& Surface::patch(int x,int y,int z) {
     else if(std::abs(n.y)<=std::abs(n.z))reference={0,1,0};else reference={0,0,1};
     result.u_axis=unit(cross(reference,n));result.v_axis=cross(n,result.u_axis);
     double matrix[6][6]={},rhs[6]={},coeff[6]={};
-    result.u_min=result.v_min=std::numeric_limits<double>::infinity();
-    result.u_max=result.v_max=-std::numeric_limits<double>::infinity();
     for(Vec p:points) {
         double u=dot(p,result.u_axis),v=dot(p,result.v_axis),w=dot(p,n);
         double row[]={u*u,v*v,u*v,u,v,1};
-        result.u_min=std::min(result.u_min,u);result.u_max=std::max(result.u_max,u);
-        result.v_min=std::min(result.v_min,v);result.v_max=std::max(result.v_max,v);
         for(int i=0;i<6;++i){rhs[i]+=row[i]*w;for(int j=0;j<6;++j)matrix[i][j]+=row[i]*row[j];}
     }
     if(least_squares(matrix,rhs,coeff)<6)++rank_deficient_fits;
@@ -127,23 +82,54 @@ const std::vector<int>& Surface::candidates(int x,int y,int z) {
             if(grid.boundary[grid.index(xx,yy,zz)])cells.push_back(grid.index(xx,yy,zz));
     dirty_candidates[id]=0;return cells;
 }
-bool Surface::can_hit_horizontal_ray(double z,Vec direction) {
-    for(int cell:grid.surface_cells) {
-        Cell p=grid.coordinates(cell);const Patch& s=patch(p.x,p.y,p.z);
-        if(!s.defined)continue;
-        auto [low,high]=s.z_bounds();
-        if(z<low||z>high||low==high)continue;
-        double minimum=std::numeric_limits<double>::infinity();
-        for(double u:{s.u_min,s.u_max})for(double v:{s.v_min,s.v_max}) {
-            Vec normal=s.outward-s.u_axis*(2*s.a*u+s.c*v+s.d)-s.v_axis*(2*s.b*v+s.c*u+s.e);
-            minimum=std::min(minimum,dot(direction,normal));
-        }
-        if(minimum<-1e-9)return true;
+bool Surface::can_hit_horizontal_ray(double z) {
+    double level=z*subdivisions;int cell=static_cast<int>(std::floor(level));
+    if(cell<0||cell>=grid.geometry.nz*subdivisions)return false;
+    for(int y=0;y<grid.geometry.ny*subdivisions;++y)for(int x=0;x<grid.geometry.nx*subdivisions;++x) {
+        auto [low,high]=field(x,y,cell).last_axis_range(level-cell);
+        if(low<0&&high>0)return true;
     }
     return false;
 }
 
+Surface::Field::Node Surface::node(int x,int y,int z) {
+    int width=grid.geometry.nx*subdivisions,height=grid.geometry.ny*subdivisions;
+    int id=(z*height+(y%height+height)%height)*width+(x%width+width)%width;
+    if(!dirty_nodes[id])return node_values[id];
+    Vec point{double(x)/subdivisions,double(y)/subdivisions,double(z)/subdivisions};ImplicitBlend<3> blend;
+    double support=radius+0.5;
+    std::array<double,3> window{std::min(support,grid.geometry.nx/2.0),std::min(support,grid.geometry.ny/2.0),support};
+    for(int cell:candidates(int(std::floor(point.x)),int(std::floor(point.y)),std::min(int(std::floor(point.z)),grid.geometry.nz-1))) {
+        Cell p=grid.coordinates(cell);Patch fit=patch(p.x,p.y,p.z);if(!fit.defined)continue;
+        fit.origin.x+=grid.geometry.nx*std::round((point.x-fit.origin.x)/grid.geometry.nx);
+        fit.origin.y+=grid.geometry.ny*std::round((point.y-fit.origin.y)/grid.geometry.ny);
+        Vec relative=point-fit.origin;double u=dot(relative,fit.u_axis),v=dot(relative,fit.v_axis),w=dot(relative,fit.outward);
+        double fu=2*fit.a*u+fit.c*v+fit.d,fv=2*fit.b*v+fit.c*u+fit.e;
+        Vec gradient=fit.outward-fit.u_axis*fu-fit.v_axis*fv;
+        auto mixed=[&](int i,int j){return -2*fit.a*fit.u_axis[i]*fit.u_axis[j]-2*fit.b*fit.v_axis[i]*fit.v_axis[j]-fit.c*(fit.u_axis[i]*fit.v_axis[j]+fit.v_axis[i]*fit.u_axis[j]);};
+        Field::Node local{w-fit.height(u,v),gradient.x,gradient.y,mixed(0,1),gradient.z,mixed(0,2),mixed(1,2),0};
+        blend.add({relative.x,relative.y,relative.z},window,local);
+    }
+    Field::Node value{};
+    if(blend.weights[0]>0)value=blend.normalized();
+    else value[0]=grid.at(int(std::floor(point.x)),int(std::floor(point.y)),int(std::floor(point.z)))==Gas?radius+1:-(radius+1);
+    dirty_nodes[id]=0;return node_values[id]=value;
+}
+
+const Surface::Field& Surface::field(int x,int y,int z) {
+    int width=grid.geometry.nx*subdivisions,height=grid.geometry.ny*subdivisions;
+    int id=(z*height+(y%height+height)%height)*width+(x%width+width)%width;
+    auto found=fields.find(id);if(found!=fields.end())return found->second;
+    std::array<Field::Node,8> samples;
+    for(int corner=0;corner<8;++corner)samples[corner]=node(x+(corner&1),y+((corner>>1)&1),z+((corner>>2)&1));
+    return fields.emplace(id,Field(samples,1.0/subdivisions)).first->second;
+}
 void Surface::invalidate(int x,int y,int z) {
+    int reach=(2*radius+3)*subdivisions+1,width=grid.geometry.nx*subdivisions,height=grid.geometry.ny*subdivisions;
+    for(int dz=-reach;dz<=reach;++dz)for(int dy=-reach;dy<=reach;++dy)for(int dx=-reach;dx<=reach;++dx) {
+        int zz=z*subdivisions+dz,xx=x*subdivisions+dx,yy=y*subdivisions+dy;
+        if(zz>=0&&zz<=grid.geometry.nz*subdivisions){int id=(zz*height+(yy%height+height)%height)*width+(xx%width+width)%width;dirty_nodes[id]=1;fields.erase(id);}
+    }
     for(int dz=-radius-2;dz<=radius+2;++dz)for(int dy=-radius-2;dy<=radius+2;++dy)for(int dx=-radius-2;dx<=radius+2;++dx) {
         int zz=z+dz;if(zz<0||zz>=grid.geometry.nz)continue;
         int cell=grid.index(x+dx,y+dy,zz);dirty_candidates[cell]=1;

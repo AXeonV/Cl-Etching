@@ -37,10 +37,8 @@ void supercover_vertices_and_edges() {
 Patch flat() { Patch p;p.origin={0,0,10};p.u_axis={1,0,0};p.v_axis={0,1,0};p.outward={0,0,-1};return p; }
 void quadratic_patch() {
     Patch p=flat();p.a=0.1;p.b=0.2;p.c=0.05;p.d=0.3;p.e=0.1;p.f=0.4;
-    auto hit=p.intersection({1,2,0},{0,0,1},0,20);
-    check(hit.has_value(),"ray intersects bivariate quadratic");close(*hit,10-p.height(1,2));
+    close(p.height(1,2),1.9);close(norm(p.position(1,2)-Vec{1,2,8.1}),0);
     Vec expected=unit(Vec{-0.6,-0.95,-1});close(norm(p.normal(1,2)-expected),0);
-    check(!p.intersection({1,2,0},{0,0,-1},0,20),"reject backward root");
 }
 void normal_projection() {
     Patch p=flat();auto projected=p.project({2,3,7});close(projected.u,2);close(projected.v,3);close(projected.distance,3);
@@ -69,6 +67,13 @@ void fitted_plane_and_periodic_mapping() {
     check(mapped&&mapped->z==20,"normal maps gas point to surface voxel");
     check(!transport.next_hit({{16,16,1},{0,1,0},100})&&transport.last_end==RayEnd::PeriodicOrbit,"lateral periodic orbit");
     check(!transport.next_hit({{16,16,19},unit({1,2,0}),100})&&transport.last_end==RayEnd::PeriodicOrbit,"arbitrary horizontal ray above a plane terminates");
+}
+void closed_rational_orbit() {
+    Geometry geometry{32,32,64,30,0,32,32};Grid grid(geometry);
+    for(int z=12;z<19;++z)for(int y=15;y<17;++y)for(int x=15;x<17;++x){int cell=grid.index(x,y,z);grid.material[cell]=Silicon;grid.sites[cell][0]=30;}
+    grid.refresh(16,16,32,64);Surface surface(grid);Transport transport(grid,surface);
+    auto hit=transport.next_hit({{0.25,0.25,15.25},unit({1,2,0}),100});
+    check(!hit&&transport.last_end==RayEnd::PeriodicOrbit,"clear rational periodic ray terminates without an arbitrary bounce cap");
 }
 void reflection_in_y_plane() {
     Geometry g=geometry();g.opening=g.nx;Grid grid(g);
@@ -140,9 +145,9 @@ int main() {
     std::cout<<std::unitbuf;
     std::vector<std::pair<std::string,std::function<void()>>> tests={
         {"spatial vectors",vectors},{"voxel storage and aperture",voxel_storage_and_hole},
-        {"vertex and edge supercover",supercover_vertices_and_edges},{"bivariate intersection",quadratic_patch},
+        {"vertex and edge supercover",supercover_vertices_and_edges},{"local quadratic surface geometry",quadratic_patch},
         {"normal projection",normal_projection},{"six coefficient least squares",six_coefficient_fit},
-        {"fitted plane and y periodicity",fitted_plane_and_periodic_mapping},{"y reflection and reverse path",reflection_in_y_plane},
+        {"fitted plane and y periodicity",fitted_plane_and_periodic_mapping},{"rational periodic orbit",closed_rational_orbit},{"y reflection and reverse path",reflection_in_y_plane},
         {"corner normal mapping",corner_normal_mapping},{"26-neighbor inventory and cache",neighbor_transfer_and_cache},
         {"solid-angle source distributions",source_solid_angle_distributions},{"shared engine inventory",shared_engine_inventory},
         {"centroid degeneracy",centroid_degeneracy}

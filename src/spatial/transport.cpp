@@ -1,5 +1,7 @@
 #include "transport.hpp"
+#include "common/implicit.hpp"
 #include "traversal.hpp"
+#include "common/periodic.hpp"
 #include <algorithm>
 namespace etch::spatial {
 namespace {
@@ -18,15 +20,9 @@ std::optional<Interval> local_interval(Vec p,Vec d,Vec center,double half) {
     if(result.last<result.first)return std::nullopt;
     return result;
 }
-double horizontal_period(Vec d,const Geometry& g) {
-    if(d.z!=0)return infinity;
-    if(d.x==0)return g.ny/std::abs(d.y);
-    if(d.y==0)return g.nx/std::abs(d.x);
-    double x=g.nx/std::abs(d.x),y=g.ny/std::abs(d.y);
-    return x==y?x:infinity;
+
 }
-}
-std::optional<Cell> Transport::reaction_cell(Vec point,Vec normal,Vec origin) const {
+std::optional<Cell> Transport::reaction_cell(Vec point,Vec normal,Vec origin) {
     int x=static_cast<int>(std::floor(point.x)),y=static_cast<int>(std::floor(point.y)),z=static_cast<int>(std::floor(point.z));
     if(z>=0&&z<grid.geometry.nz&&grid.boundary[grid.index(x,y,z)])return Cell{grid.wrap_x(x),grid.wrap_y(y),z};
     double nearest=infinity;std::optional<Cell> result;
@@ -42,40 +38,41 @@ std::optional<Cell> Transport::reaction_cell(Vec point,Vec normal,Vec origin) co
             walk.advance();
         }
     }
+    if(result)return result;
+    double transverse=infinity,along=infinity;
+    for(int cell:surface.candidates(x,y,z)) {
+        Cell c=grid.coordinates(cell);Vec center{c.x+0.5,c.y+0.5,c.z+0.5};
+        center.x+=grid.geometry.nx*std::round((point.x-center.x)/grid.geometry.nx);
+        center.y+=grid.geometry.ny*std::round((point.y-center.y)/grid.geometry.ny);
+        Vec offset=center-point;double distance=dot(offset,normal);
+        double error=std::max(0.0,dot(offset,offset)-distance*distance);
+        if(error<transverse||(error==transverse&&std::abs(distance)<along)) {
+            transverse=error;along=std::abs(distance);result=c;
+        }
+    }
+    if(result){++off_normal_mapped_hits;max_mapping_offset=std::max(max_mapping_offset,std::sqrt(transverse));}
     return result;
 }
 std::optional<Hit> Transport::next_hit(const Particle& particle) {
-    Vec p=particle.position,d=particle.direction;
-    int nx=grid.geometry.nx,ny=grid.geometry.ny,nz=grid.geometry.nz;
-    if(d.z==0 && !surface.can_hit_horizontal_ray(p.z,d)) {
-        ++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;
-    }
-    VoxelWalk walk(p,d);double period=horizontal_period(d,grid.geometry);
+    Vec p=particle.position,d=particle.direction;int n=surface.resolution(),nz=grid.geometry.nz*n;
+    if(d.z==0&&!surface.can_hit_horizontal_ray(p.z)){++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
+    VoxelWalk walk(p*n,d*n);double period=d.z==0?horizontal_ray_period(d.x,d.y,grid.geometry.nx,grid.geometry.ny):infinity;
     while(walk.cell[2]>=0&&walk.cell[2]<nz) {
-        double nearest=infinity;std::optional<Hit> best;
-        auto coordinate=walk.cell;
-        for(int cell:surface.candidates(coordinate[0],coordinate[1],coordinate[2])) {
-            Cell index=grid.coordinates(cell);Patch patch=surface.patch(index.x,index.y,index.z);
-            if(!patch.defined)continue;
-            patch.origin.x+=nx*std::round((coordinate[0]+0.5-patch.origin.x)/nx);
-            patch.origin.y+=ny*std::round((coordinate[1]+0.5-patch.origin.y)/ny);
-            auto interval=local_interval(p,d,patch.origin,surface.fit_radius()+0.5);
-            if(!interval)continue;
-            double start=std::max({1e-8,walk.entry,interval->first}),end=std::min(walk.exit(),interval->last);
-            if(start>end)continue;
-            auto distance=patch.intersection(p,d,start,end);
-            if(!distance){++no_local_intersections;continue;}
-            if(*distance>=nearest)continue;
-            Vec point=p+d*(*distance),relative=point-patch.origin;
-            Vec normal=patch.normal(dot(relative,patch.u_axis),dot(relative,patch.v_axis));
-            auto mapped=reaction_cell(point,normal,patch.origin);
-            if(!mapped){++mapping_failures;continue;}
-            nearest=*distance;best=Hit{point,normal,grid.index(mapped->x,mapped->y,mapped->z)};
-        }
-        if(best) {
-            if(grid.index(static_cast<int>(std::floor(best->position.x)),static_cast<int>(std::floor(best->position.y)),
-                          static_cast<int>(std::floor(best->position.z)))!=best->cell)++normal_mapped_hits;
-            return best;
+        double start=walk.entry,end=walk.exit();auto cell=walk.cell;
+        if(end>start) {
+            const auto& field=surface.field(cell[0],cell[1],cell[2]);
+            Vec origin{double(cell[0]),double(cell[1]),double(cell[2])},a=(p+d*start)*n-origin,b=(p+d*end)*n-origin;
+            for(double root:field.intersections({a.x,a.y,a.z},{b.x,b.y,b.z})) {
+                double t=start+(end-start)*root;if(t<1e-8)continue;
+                Vec point=p+d*t,relative=point*n-origin;
+                auto gradient=field.gradient({relative.x,relative.y,relative.z});Vec n{gradient[0],gradient[1],gradient[2]};
+                if(norm(n)==0)continue;
+                Vec normal=unit(n);if(dot(d,normal)>=-1e-10)continue;auto owner=reaction_cell(point,normal,point);
+                if(!owner){++mapping_failures;continue;}
+                int mapped=grid.index(owner->x,owner->y,owner->z);
+                if(grid.index(int(std::floor(point.x)),int(std::floor(point.y)),int(std::floor(point.z)))!=mapped)++normal_mapped_hits;
+                return Hit{point,normal,mapped};
+            }
         }
         walk.advance();
         if(walk.entry>=period){++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
