@@ -2,11 +2,11 @@
 #include "common/linear.hpp"
 #include <algorithm>
 namespace etch::spatial {
-Vec Patch::normal(double u,double v) const {
+Vec3 Patch::normal(double u,double v) const {
     return unit(outward-u_axis*(2*a*u+c*v+d)-v_axis*(2*b*v+c*u+e));
 }
-Projection Patch::project(Vec point) const {
-    Vec q=point-origin;double u0=dot(q,u_axis),v0=dot(q,v_axis),w0=dot(q,outward);
+Projection Patch::project(Vec3 point) const {
+    Vec3 q=point-origin;double u0=dot(q,u_axis),v0=dot(q,v_axis),w0=dot(q,outward);
     double bound=std::abs(height(u0,v0)-w0),best_u=u0,best_v=v0,best=bound*bound;
     auto objective=[&](double u,double v) {
         double h=height(u,v)-w0;
@@ -35,7 +35,7 @@ Projection Patch::project(Vec point) const {
         double value=objective(u,v);
         if(value<best) { best=value;best_u=u;best_v=v; }
     }
-    Vec delta=point-position(best_u,best_v);
+    Vec3 delta=point-position(best_u,best_v);
     return {best_u,best_v,std::copysign(std::sqrt(best),dot(delta,normal(best_u,best_v)))};
 }
 Surface::Surface(Grid& g,int r,int n):grid(g),radius(r),subdivisions(n),nearby_cells(g.material.size()),dirty_candidates(g.material.size(),1) {
@@ -44,10 +44,10 @@ Surface::Surface(Grid& g,int r,int n):grid(g),radius(r),subdivisions(n),nearby_c
 const Patch& Surface::patch(int x,int y,int z) {
     int cell=grid.index(x,y,z);auto found=patches.find(cell);
     if(found!=patches.end())return found->second;
-    std::vector<Vec> points;Vec centroid{};int count=0;
+    std::vector<Vec3> points;Vec3 centroid{};int count=0;
     for(int dz=-radius;dz<=radius;++dz)for(int dy=-radius;dy<=radius;++dy)for(int dx=-radius;dx<=radius;++dx) {
         int zz=z+dz;if(zz<0||zz>=grid.geometry.nz)continue;
-        int id=grid.index(x+dx,y+dy,zz);Vec offset{double(dx),double(dy),double(dz)};
+        int id=grid.index(x+dx,y+dy,zz);Vec3 offset{double(dx),double(dy),double(dz)};
         if(grid.material[id]!=Gas){centroid=centroid+offset;++count;}
         if(grid.boundary[id])points.push_back(offset);
     }
@@ -56,12 +56,12 @@ const Patch& Surface::patch(int x,int y,int z) {
     ++fit_count;
     if(norm(centroid)==0) { result.defined=false;++undefined_normal_fits;return patches.emplace(cell,result).first->second; }
     result.outward=unit(centroid*-1);
-    Vec n=result.outward,reference;
+    Vec3 n=result.outward,reference;
     if(std::abs(n.x)<=std::abs(n.y)&&std::abs(n.x)<=std::abs(n.z))reference={1,0,0};
     else if(std::abs(n.y)<=std::abs(n.z))reference={0,1,0};else reference={0,0,1};
     result.u_axis=unit(cross(reference,n));result.v_axis=cross(n,result.u_axis);
     double matrix[6][6]={},rhs[6]={},coeff[6]={};
-    for(Vec p:points) {
+    for(Vec3 p:points) {
         double u=dot(p,result.u_axis),v=dot(p,result.v_axis),w=dot(p,n);
         double row[]={u*u,v*v,u*v,u,v,1};
         for(int i=0;i<6;++i){rhs[i]+=row[i]*w;for(int j=0;j<6;++j)matrix[i][j]+=row[i]*row[j];}
@@ -96,16 +96,16 @@ Surface::Field::Node Surface::node(int x,int y,int z) {
     int width=grid.geometry.nx*subdivisions,height=grid.geometry.ny*subdivisions;
     int id=(z*height+(y%height+height)%height)*width+(x%width+width)%width;
     if(!dirty_nodes[id])return node_values[id];
-    Vec point{double(x)/subdivisions,double(y)/subdivisions,double(z)/subdivisions};ImplicitBlend<3> blend;
+    Vec3 point{double(x)/subdivisions,double(y)/subdivisions,double(z)/subdivisions};ImplicitBlend<3> blend;
     double support=radius+0.5;
     std::array<double,3> window{std::min(support,grid.geometry.nx/2.0),std::min(support,grid.geometry.ny/2.0),support};
     for(int cell:candidates(int(std::floor(point.x)),int(std::floor(point.y)),std::min(int(std::floor(point.z)),grid.geometry.nz-1))) {
         Cell p=grid.coordinates(cell);Patch fit=patch(p.x,p.y,p.z);if(!fit.defined)continue;
         fit.origin.x+=grid.geometry.nx*std::round((point.x-fit.origin.x)/grid.geometry.nx);
         fit.origin.y+=grid.geometry.ny*std::round((point.y-fit.origin.y)/grid.geometry.ny);
-        Vec relative=point-fit.origin;double u=dot(relative,fit.u_axis),v=dot(relative,fit.v_axis),w=dot(relative,fit.outward);
+        Vec3 relative=point-fit.origin;double u=dot(relative,fit.u_axis),v=dot(relative,fit.v_axis),w=dot(relative,fit.outward);
         double fu=2*fit.a*u+fit.c*v+fit.d,fv=2*fit.b*v+fit.c*u+fit.e;
-        Vec gradient=fit.outward-fit.u_axis*fu-fit.v_axis*fv;
+        Vec3 gradient=fit.outward-fit.u_axis*fu-fit.v_axis*fv;
         auto mixed=[&](int i,int j){return -2*fit.a*fit.u_axis[i]*fit.u_axis[j]-2*fit.b*fit.v_axis[i]*fit.v_axis[j]-fit.c*(fit.u_axis[i]*fit.v_axis[j]+fit.v_axis[i]*fit.u_axis[j]);};
         Field::Node local{w-fit.height(u,v),gradient.x,gradient.y,mixed(0,1),gradient.z,mixed(0,2),mixed(1,2),0};
         blend.add({relative.x,relative.y,relative.z},window,local);

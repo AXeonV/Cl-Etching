@@ -1,6 +1,6 @@
 # Cl / Si 刻蚀仿真
 
-支持二维截面和三维体素计算，通过表面捕获、反射、反应和元胞更新推进刻蚀。`--dimension 2|3` 选择几何后端，默认值为 2。两种计算共用反应模型、随机分布和逐粒子推进流程。
+支持二维截面和三维体素计算，通过表面捕获、反射、反应和元胞更新推进刻蚀。`--dimension 2|3` 选择几何后端，默认值为 2。二维采用 2D3V，三维采用 3D3V；粒子以三分量单位方向和能量表示运动状态。两种计算共用反应模型、方向分布和逐粒子推进流程，二维位置与表面几何位于 x–z 截面。
 
 ![etching-2d](image/etching-2d.png)
 ![etching-3d](image/etching-3d.png)
@@ -23,34 +23,36 @@ flowchart LR
     Src --> Spatial["spatial/<br/>三维体素后端，etch::spatial"]
 
     Common --> Engine["engine.hpp · events.hpp<br/>逐粒子推进、运行设置与统计"]
-    Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应模型、固相位点与材料类型"]
-    Common --> Random["random.hpp<br/>随机数与标量分布"]
+    Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应、位点库存与迁移"]
+    Common --> Random["random.hpp · direction.hpp<br/>随机数、标量分布与三分量方向分布"]
+    Common --> Particle["particle.hpp<br/>粒子状态与三分量碰撞法线"]
+    Common --> Vector["vector.hpp<br/>空间向量与镜面反射"]
     Common --> Linear["linear.hpp<br/>最小二乘求解"]
+    Common --> Traversal["traversal.hpp<br/>DDA 网格遍历与射线包围盒区间"]
     Common --> Geometry["implicit.hpp · periodic.hpp<br/>Hermite 重建、区间求根与周期判定"]
     Common --> Output["output.hpp<br/>数组与统计输出"]
 
     Planar --> PlanarGrid["grid.hpp/.cpp<br/>二维网格与四邻接边界"]
     Planar --> PlanarSurface["surface.hpp/.cpp<br/>局部二次曲线与连续隐式表面"]
     Planar --> PlanarTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
-    Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>八邻域删格与库存迁移"]
-    Planar --> PlanarSource["source.hpp<br/>二维发射角与线粒子源"]
-    Planar --> PlanarVector["vector.hpp<br/>平面向量与镜面反射"]
+    Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>八邻域删格选择与几何更新"]
+    Planar --> PlanarSource["source.hpp<br/>二维源线粒子发射"]
+    Planar --> PlanarVector["vector.hpp<br/>截面向量与方向投影"]
     Planar --> PlanarBackend["backend.hpp · output.cpp<br/>后端组件装配与二维几何输出"]
 
     Spatial --> SpatialGrid["grid.hpp/.cpp<br/>三维网格与六邻接边界"]
     Spatial --> SpatialSurface["surface.hpp/.cpp<br/>局部二次曲面与连续隐式表面"]
-    Spatial --> SpatialTransport["transport.hpp/.cpp · traversal.hpp<br/>体素遍历、射线追踪与反应元胞定位"]
-    Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>二十六邻域删格与库存迁移"]
-    Spatial --> SpatialSource["source.hpp<br/>立体角分布与面粒子源"]
-    Spatial --> SpatialVector["vector.hpp<br/>空间向量与镜面反射"]
+    Spatial --> SpatialTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
+    Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>二十六邻域删格选择与几何更新"]
+    Spatial --> SpatialSource["source.hpp<br/>三维源平面粒子发射"]
     Spatial --> SpatialBackend["backend.hpp · output.cpp<br/>后端组件装配与三维几何输出"]
 
     Utils --> Build["build.py<br/>编译与测试入口"]
     Utils --> Results["results.py<br/>结果读取与库存核对"]
     Utils --> Plot["plot.py · volume.py · surface.py<br/>碰撞表面、截面与体素剖视图"]
 
-    Tests --> NumericalTests["common/<br/>插值连续性、解析曲面与多根检查"]
-    Tests --> TrackingTests["test_tracking.cpp<br/>反向追踪与几何缓存一致性"]
+    Tests --> NumericalTests["common/<br/>插值、求根、网格遍历与包围盒检查"]
+    Tests --> TrackingTests["test_tracking.cpp<br/>2D3V 一致性、反向追踪与几何缓存"]
     Tests --> PlanarTests["planar/<br/>二维核心与几何回归测试"]
     Tests --> SpatialTests["spatial/<br/>三维曲面、追踪与库存测试"]
     Tests --> CliTests["test_cli.py<br/>维度入口与输出格式测试"]
@@ -58,7 +60,7 @@ flowchart LR
 
 ## 碰撞角、捕获与表面反应
 
-令 $\mathbf d$ 为粒子的单位运动方向，$\mathbf n$ 为碰撞点处从固体指向气体的拟合面单位法线，$\theta$ 为相对内法线的入射角：
+令 $\mathbf d=(d_x,d_y,d_z)$ 为粒子的单位运动方向，$\mathbf n$ 为碰撞点处从固体指向气体的拟合面单位法线。二维截面法线 $(n_x,n_z)$ 在碰撞计算中取 $(n_x,0,n_z)$。$\theta$ 为相对内法线的入射角：
 
 $$
 \mu=\cos\theta=-\mathbf d\cdot\mathbf n,\qquad 0\leq\theta\leq\frac{\pi}{2}.
@@ -155,15 +157,27 @@ $$
 
 ## 入射角与能量
 
-二维粒子在源线上均匀发射，三维粒子在源平面上均匀发射。发射角相对于整体向下方向定义，碰撞角相对于局部内法线定义。`--particles` 表示整条源线或整个源平面的总发射数。
+二维粒子在源线上均匀发射，三维粒子在源平面上均匀发射。两种计算均保存三分量单位方向 $\mathbf d=(d_x,d_y,d_z)$。二维粒子的位置沿截面投影推进：
 
-| 选项 | 二维 | 三维 |
-|---|---|---|
-| `--angle gaussian` | 截断到 ±90° 的角度正态分布 | 轴对称高斯立体角强度 |
-| `--angle cosine` | 角度密度 $\cos\alpha/2$ | 立体角密度 $\cos\theta/\pi$ |
-| `--angle normal` | 方向 $(0,1)$ | 方向 $(0,0,1)$ |
+$$
+\mathbf r_{xz}(s)=(x_0,z_0)+s(d_x,d_z).
+$$
 
-高斯参数均以 $\sigma=\mathrm{FWHM}/2.35482$ 换算。三维定义强度 $I(\theta)\propto\exp[-\theta^2/(2\sigma^2)]$，极角抽样密度包含 $\sin\theta$ 雅可比，方位角均匀分布于 $[0,2\pi)$。二维角度密度和三维立体角强度是不同的输入定义。
+面外分量 $d_y$ 保存在粒子状态中。二维碰撞角使用完整方向与法线 $(n_x,0,n_z)$ 计算，投影 $(d_x,d_z)$ 保留其原有长度。镜面反射同时更新 $d_x$、$d_z$，并保持 $d_y$；三分量方向的总长度和粒子能量保持不变。
+
+发射极角 $\alpha$ 相对于整体向下方向定义，方位角 $\varphi$ 在 $[0,2\pi)$ 内均匀抽样：
+
+$$
+\mathbf d=(\sin\alpha\cos\varphi,\sin\alpha\sin\varphi,\cos\alpha).
+$$
+
+| 选项 | 方向分布 |
+|---|---|
+| `--angle gaussian` | 轴对称高斯立体角强度 $I(\alpha)\propto\exp[-\alpha^2/(2\sigma^2)]$ |
+| `--angle cosine` | 下半球立体角密度 $\cos\alpha/\pi$ |
+| `--angle normal` | 固定方向 $(0,0,1)$ |
+
+高斯宽度按 $\sigma=\mathrm{FWHM}/2.35482$ 换算，极角抽样密度包含 $\sin\alpha$ 雅可比，取值范围为 $[0,\pi/2)$。`--particles` 表示整条源线或整个源平面的总发射数。
 
 `--energy constant` 使用指定单能，`--energy gaussian` 在正能量范围内作高斯抽样。当前反应量由角度或氯化状态决定；粒子携带抽样能量，镜面反射后能量保持不变。
 
@@ -250,7 +264,7 @@ python -m utils.volume RUN_A RUN_B RUN_C --output volume.png
 
 ## 输出与诊断
 
-`summary.json`、`arguments.txt` 和原始数组保存输入、库存和轨迹统计。`dimension` 标识维度，三维额外保存 `ny`、`opening_y_cells`。`surface.csv` 保存局部二次拟合的系数与坐标轴。`surface_nodes.bin` 保存连续碰撞表面的节点函数值及混合导数，按 z、y（三维）、x、导数掩码排列，各轴节点数为元胞数乘以几何细分数再加一。`collision_angles.csv` 按 1° 区间记录首次撞击、反射后撞击、捕获与反应去除数；角度均相对于碰撞点的局部法线。
+`summary.json`、`arguments.txt` 和原始数组保存输入、库存和轨迹统计。`dimension` 标识几何维度，`direction_components` 为 3，三维额外保存 `ny`、`opening_y_cells`。`surface.csv` 保存局部二次拟合的系数与坐标轴。`surface_nodes.bin` 保存连续碰撞表面的节点函数值及混合导数，按 z、y（三维）、x、导数掩码排列，各轴节点数为元胞数乘以几何细分数再加一。`collision_angles.csv` 按 1° 区间记录首次撞击、反射后撞击、捕获与反应去除数；角度均相对于碰撞点的局部法线。
 
 - `deleted_cells`：删除的元胞数。
 - `relocated_cells`：选择邻格删除并转移库存的次数。
@@ -266,4 +280,4 @@ python -m utils.volume RUN_A RUN_B RUN_C --output volume.png
 
 ## 扩展
 
-新增表面模型实现 `Reaction::apply(Sites&, ...)`，直接操作单元库存。标量能量分布放在 `common`，方向分布由各维度粒子源定义。新增几何算法在对应后端实现，通过 `Backend` 提供给共用引擎。维度分派集中在 `app`，反应模型和推进流程不包含维度判断。
+新增表面模型实现 `Reaction::apply(Sites&, ...)`，直接操作单元库存。标量能量分布和三分量方向分布放在 `common`，各维度粒子源定义发射位置。新增几何算法在对应后端实现，通过 `Backend` 提供给共用引擎。维度分派集中在 `app`，反应模型和推进流程不包含维度判断。

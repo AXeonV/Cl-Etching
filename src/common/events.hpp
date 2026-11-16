@@ -2,6 +2,12 @@
 #include <array>
 namespace etch {
 enum class RayEnd { Escaped, MissedSurface, PeriodicOrbit };
+struct TrackingDiagnostics {
+    RayEnd last_end=RayEnd::Escaped;
+    long long interior_exits=0,periodic_orbits=0;
+    long long normal_mapped_hits=0,mapping_failures=0,off_normal_mapped_hits=0;
+    double max_mapping_offset=0;
+};
 template<class Geometry> struct RunSettings {
     Geometry geometry;
     int fit_radius=3, max_bounces=0, surface_subdivisions=1;

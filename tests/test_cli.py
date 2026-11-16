@@ -29,6 +29,7 @@ class CommandLineTests(unittest.TestCase):
                     with self.subTest(dimension=dimension, model=model):
                         run = self.run_case(dimension, model, Path(temporary) / f"{dimension}-{model}")
                         self.assertEqual(run["meta"]["dimension"], dimension)
+                        self.assertEqual(run["meta"]["direction_components"], 3)
                         self.assertEqual(run["material"].shape, (64, 12, 24) if dimension == 3 else (64, 24))
                         self.assertEqual(run["sites"].shape, (*run["material"].shape, 4))
                         self.assertEqual(inventory_errors(run)["silicon"], 0)
@@ -38,14 +39,15 @@ class CommandLineTests(unittest.TestCase):
                         self.assertTrue(np.isfinite(run["surface_nodes"]).all())
                         self.assertEqual(run["curves"].shape[1], 19 if dimension == 3 else 10)
 
-    def test_spatial_distribution_options(self):
+    def test_distribution_options(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
-            for angle in ["normal", "cosine", "gaussian"]:
-                with self.subTest(angle=angle):
-                    run = self.run_case(3, "yield", Path(temporary) / angle,
-                                        options=("--angle", angle, "--energy", "gaussian", "--energy-sigma", "5", "--surface-subdivisions", "2"))
-                    self.assertEqual(inventory_errors(run)["silicon"], 0)
-                    self.assertTrue(np.isfinite(run["curves"]).all())
+            for dimension in [2, 3]:
+                for angle in ["normal", "cosine", "gaussian"]:
+                    with self.subTest(dimension=dimension, angle=angle):
+                        run = self.run_case(dimension, "yield", Path(temporary) / f"{dimension}-{angle}",
+                                            options=("--angle", angle, "--energy", "gaussian", "--energy-sigma", "5", "--surface-subdivisions", "2"))
+                        self.assertEqual(inventory_errors(run)["silicon"], 0)
+                        self.assertTrue(np.isfinite(run["curves"]).all())
 
     def test_saved_collision_field_matches_flat_plane(self):
         from utils.surface import evaluate
@@ -59,12 +61,12 @@ class CommandLineTests(unittest.TestCase):
                 np.testing.assert_allclose(evaluate(run["surface_nodes"], coordinates, 0.5),
                                            16.5 - z, atol=1e-11)
 
-    def test_legacy_arguments_default_to_planar(self):
+    def test_default_dimension_is_planar(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
-            old = self.run_case(2, "yield", Path(temporary) / "default", explicit=False)
+            default = self.run_case(2, "yield", Path(temporary) / "default", explicit=False)
             explicit = self.run_case(2, "yield", Path(temporary) / "explicit")
-            np.testing.assert_array_equal(old["material"], explicit["material"])
-            np.testing.assert_array_equal(old["sites"], explicit["sites"])
+            np.testing.assert_array_equal(default["material"], explicit["material"])
+            np.testing.assert_array_equal(default["sites"], explicit["sites"])
 
 
 if __name__ == "__main__":

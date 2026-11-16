@@ -1,5 +1,5 @@
 #pragma once
-#include "vector.hpp"
+#include "common/vector.hpp"
 #include "common/material.hpp"
 #include <vector>
 #include <set>
@@ -23,7 +23,7 @@ public:
     Cell coordinates(int cell) const { return {cell%geometry.nx,(cell/geometry.nx)%geometry.ny,cell/(geometry.nx*geometry.ny)}; }
     Material at(int x,int y,int z) const;
     int remaining(int cell) const { return site_count(sites[cell]); }
-    void wrap_position(Vec& p) const;
+    void wrap_position(Vec3& p) const;
     void refresh(int x,int y,int z,int radius);
     void remove_empty_cell(int cell);
     long long silicon_inventory() const { return etch::silicon_inventory(sites); }

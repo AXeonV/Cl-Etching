@@ -17,7 +17,7 @@ Geometry small_geometry() {
     return Geometry{40, 80, 20, 6, 16};
 }
 Settings small_settings() { Settings s{small_geometry()}; s.max_bounces = 500; return s; }
-Source beam() { return {constant(0), constant(100)}; }
+Source beam() { return {normal_direction(), constant(100)}; }
 
 void angular_functions() {
     close(cosine_yield(1), 1); close(cosine_yield(0), 0);
@@ -42,13 +42,13 @@ void yield_per_incident_ion() {
                 double angle = degrees*pi/180, mu = std::cos(angle);
                 CaptureProbability probability = fixed_capture
                     ? CaptureProbability([](double) { return 0.4; }) : cosine_capture;
-                Simulation simulation(Settings{g}, Source{constant(angle),constant(100)},
+                Simulation simulation(Settings{g}, Source{[angle](Random&) { return Vec3{std::sin(angle),0,std::cos(angle)}; },constant(100)},
                                       std::make_unique<FixedSurfaceYield>(law), probability);
                 simulation.advance(100000);
                 close(simulation.reaction->removed / 100000.0, law(mu), 0.025);
                 check(simulation.stats.silicon_hits == 100000, "one hit per fixed-plane incident ion");
                 check(simulation.stats.deleted_cells == 0, "fixed-plane test does not change geometry");
-                check(simulation.transport.interior_exits == 0, "fixed-plane rays are intercepted");
+                check(simulation.transport.diagnostics.interior_exits == 0, "fixed-plane rays are intercepted");
             }
         }
     }
@@ -61,16 +61,67 @@ void yield_per_incident_ion() {
 void source_distributions() {
     Random rng(42);
     double sigma = 10 * std::acos(-1.0) / 180 / 2.354820045;
-    auto angle = gaussian(0, sigma, -1.5, 1.5);
-    auto cosine = cosine_angle();
-    double sum = 0, sum2 = 0, cosine_sin2 = 0;
-    for (int i = 0; i < 100000; ++i) {
-        double a = angle(rng); sum += a; sum2 += a * a;
-        double b = cosine(rng); cosine_sin2 += std::pow(std::sin(b), 2);
+    Source gaussian_source{gaussian_direction(sigma),constant(100)};
+    Source cosine_source{cosine_direction(),constant(100)};
+    double gaussian_x=0,gaussian_y=0,gaussian_x2=0,gaussian_y2=0;
+    double cosine_z=0,cosine_x2=0,cosine_y2=0;
+    for(int i=0;i<100000;++i) {
+        Particle a=gaussian_source.emit(rng,small_geometry()),b=cosine_source.emit(rng,small_geometry());
+        close(norm(a.direction),1);close(norm(b.direction),1);
+        check(a.direction.z>=0&&b.direction.z>=0,"source directions lie in the downward hemisphere");
+        check(a.position.x>=0&&a.position.x<40&&a.position.z==0.25,"planar source positions remain two-dimensional");
+        gaussian_x+=a.direction.x;gaussian_y+=a.direction.y;
+        gaussian_x2+=a.direction.x*a.direction.x;gaussian_y2+=a.direction.y*a.direction.y;
+        cosine_z+=b.direction.z;cosine_x2+=b.direction.x*b.direction.x;cosine_y2+=b.direction.y*b.direction.y;
     }
-    close(sum / 100000, 0, 0.001);
-    close(sum2 / 100000, sigma * sigma, 0.0001);
-    close(cosine_sin2 / 100000, 1.0 / 3, 0.005);
+    close(gaussian_x/100000,0,0.001);close(gaussian_y/100000,0,0.001);
+    close(gaussian_x2/100000,sigma*sigma,0.0002);close(gaussian_y2/100000,sigma*sigma,0.0002);
+    close(cosine_z/100000,2.0/3,0.003);
+    close(cosine_x2/100000,0.25,0.003);close(cosine_y2/100000,0.25,0.003);
+}
+void out_of_plane_collision() {
+    Geometry g=small_geometry();g.opening=g.nx;
+    Grid grid(g);Surface surface(grid);Transport transport(grid,surface);
+    auto normal_hit=transport.next_hit({{20.3,1},{0,0,1},100});
+    Particle particle{{20.3,1},{0,0.8,0.6},100};
+    auto hit=transport.next_hit(particle);
+    check(normal_hit&&hit,"both projected rays reach the plane");
+    close(norm(hit->position-normal_hit->position),0);
+    close(-dot(particle.direction,hit->normal),0.6);
+    Vec3 outgoing=reflected(particle.direction,hit->normal);
+    close(outgoing.y,0.8);close(outgoing.z,-0.6);close(norm(outgoing),1);
+    for(auto law:{cosine_yield,enhanced_yield}) {
+        Simulation simulation(Settings{g},Source{[](Random&){return Vec3{0,0.8,0.6};},constant(100)},
+                              std::make_unique<FixedSurfaceYield>(law));
+        simulation.advance(100000);
+        close(simulation.reaction->removed/100000.0,law(0.6),0.025);
+        close(simulation.reaction->captures/100000.0,0.6,0.01);
+        check(simulation.stats.angles[53].primary==100000,"collision angle uses all three direction components");
+        check(simulation.stats.silicon_hits==100000,"one collision per fixed-plane incident ray");
+    }
+}
+void projected_horizontal_paths() {
+    Geometry g=small_geometry();g.opening=g.nx;
+    Grid grid(g);
+    for(int z=20;z<50;++z)for(int x=12;x<28;++x) {
+        int cell=grid.index(x,z);grid.material[cell]=Gas;grid.sites[cell]={};
+    }
+    grid.refresh(20,40,80);Surface surface(grid);Transport transport(grid,surface);
+    for(double dx:{0.1,1e-12}) {
+        Particle particle{{13,30},{dx,std::sqrt(1-dx*dx),0},100};
+        auto wall=transport.next_hit(particle);
+        check(wall.has_value(),"slow projected ray reaches the wall before its x period closes");
+        close(wall->position.x,28.5,1e-5);close(wall->position.z,30);
+        Vec3 outgoing=reflected(particle.direction,wall->normal);
+        close(outgoing.y,particle.direction.y);close(outgoing.x,-dx,1e-15);
+        auto opposite=transport.next_hit({wall->position,outgoing,100});
+        check(opposite.has_value(),"slow reflected projection reaches the opposite wall");
+        close(opposite->position.x,11.5,1e-5);
+    }
+    for(Vec3 direction:{Vec3{0,1,0},Vec3{0,-1,0},Vec3{0.1,std::sqrt(0.99),0}}) {
+        check(!transport.next_hit({{13,1},direction,100})&&transport.diagnostics.last_end==RayEnd::PeriodicOrbit,
+              "unintercepted projected orbit terminates");
+    }
 }
 void curve_geometry() {
     Curve flat{{0, 5}, {1, 0}, {0, -1}, 0, 0, 0};
@@ -85,7 +136,7 @@ void fitted_flat_surface() {
     Vec normal = surface.curve(20, 20).normal(0);
     close(normal.x, 0); close(normal.z, -1);
     Transport transport(grid, surface);
-    auto hit = transport.next_hit({{20.3, 1}, {0, 1}, 100});
+    auto hit = transport.next_hit({{20.3, 1}, {0, 0, 1}, 100});
     check(hit.has_value(), "flat transport hit"); close(hit->position.z, 20.5, 1e-5);
 }
 void vertical_wall_and_second_hit() {
@@ -95,7 +146,7 @@ void vertical_wall_and_second_hit() {
     }
     grid.refresh(20, 40, 80);
     Surface surface(grid); Transport transport(grid, surface);
-    Particle p{{25, 30}, unit({1, 2}), 100};
+    Particle p{{25, 30}, unit(Vec3{1, 0, 2}), 100};
     auto wall = transport.next_hit(p);
     check(wall.has_value(), "wall collision");
     close(wall->position.x, 28.5, 1e-5); close(wall->normal.x, -1, 1e-5);
@@ -114,7 +165,7 @@ void v_groove_reflection_and_reverse_path() {
     }
     grid.refresh(50,60,120);
     Surface surface(grid);Transport transport(grid,surface);
-    Particle ray{{60,30},{0,1},100};
+    Particle ray{{60,30},{0,0,1},100};
     auto first=transport.next_hit(ray);check(first.has_value(),"V-groove first wall hit");
     close(first->position.x,60);close(first->position.z,71);
     ray.position=first->position;ray.direction=reflected(ray.direction,first->normal);
@@ -126,12 +177,13 @@ void v_groove_reflection_and_reverse_path() {
     close(norm(back->position-first->position),0);
     ray.position=second->position;ray.direction=reflected(ray.direction,second->normal);
     close(ray.direction.x,0);close(ray.direction.z,-1);
-    check(!transport.next_hit(ray)&&transport.last_end==RayEnd::Escaped,"second reflection exits at top");
+    check(!transport.next_hit(ray)&&transport.diagnostics.last_end==RayEnd::Escaped,"second reflection exits at top");
 }
 
 void reflection_geometry() {
-    Vec d = unit({1, 2}), n{0, -1}, r = reflected(d, n);
-    close(norm(r), 1); close(dot(r, n), -dot(d, n)); close(r.x, d.x);
+    Vec3 d = unit(Vec3{1, 3, 2}), n = unit(Vec3{2, 0, -1}), r = reflected(d, n);
+    close(norm(r), 1); close(dot(r, n), -dot(d, n)); close(r.y, d.y);
+    close(norm(reflected(r, n)-d), 0);
 }
 void surface_cell_mapping() {
     Grid grid(small_geometry()); Surface surface(grid); Transport transport(grid, surface);
@@ -143,7 +195,7 @@ void surface_cell_mapping() {
     auto interior = transport.reaction_cell({20.7, 21.2}, {0, -1}, origin);
     check(interior && interior->x == 20 && interior->z == 20, "interior intersection maps outward along normal");
     auto closest = transport.reaction_cell({20.7,19.7},{1,0},{20.5,19.7});
-    check(closest && closest->z == 20 && transport.off_normal_mapped_hits == 1,
+    check(closest && closest->z == 20 && transport.diagnostics.off_normal_mapped_hits == 1,
           "a normal that misses all cells maps to the closest surface cell to its line");
     auto unmapped = transport.reaction_cell({20.7, 10}, {1, 0}, {20.5, 10});
     check(!unmapped, "no arbitrary owner is substituted when the normal misses the surface");
@@ -232,7 +284,7 @@ void cell_removal_and_inventory_transfer() {
         long long si = grid.silicon_inventory(), cl = grid.chlorine_inventory();
         surface.curve(x-1, 20); auto fits = surface.fit_count;
         auto removal = updater.remove(grid.index(x,20));
-        check(removal.relocated && grid.index(removal.x, removal.z) == protrusion,
+        check(removal.relocated && removal.cell == protrusion,
               "remove protruding neighbor rather than create a hole beneath it");
         check(grid.sites[original] == inventory && grid.material[original] == Silicon,
               "transfer all four chlorination states into the underfilled cell");
@@ -255,7 +307,7 @@ void flat_removal_and_fixed_mask() {
     Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
     grid.sites[grid.index(20,20)] = {};
     auto removal = updater.remove(grid.index(20,20));
-    check(!removal.relocated && removal.x == 20 && removal.z == 20,
+    check(!removal.relocated && removal.cell == grid.index(20,20),
           "flat surface advances at the underfilled cell");
     Grid masked(g); int mask = masked.index(19,19);
     masked.material[mask] = Mask; masked.refresh(20,20,3);
@@ -273,7 +325,9 @@ int main() {
         {"cell removal and inventory transfer", cell_removal_and_inventory_transfer},
         {"flat removal and fixed mask", flat_removal_and_fixed_mask},
         {"angular functions", angular_functions}, {"yield per incident ion including capture and reflection", yield_per_incident_ion},
-        {"source distribution moments", source_distributions}, {"local quadratic geometry", curve_geometry},
+        {"source distribution moments", source_distributions},
+        {"three-component collision and capture", out_of_plane_collision},
+        {"projected horizontal periods", projected_horizontal_paths}, {"local quadratic geometry", curve_geometry},
         {"fitted flat surface", fitted_flat_surface}, {"vertical fit and secondary collision", vertical_wall_and_second_hit},
         {"V-groove reflection and reverse path", v_groove_reflection_and_reverse_path},
         {"specular reflection", reflection_geometry}, {"single Cl stoichiometry", chemistry_stoichiometry},

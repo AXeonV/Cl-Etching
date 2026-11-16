@@ -1,5 +1,5 @@
 #include "transport.hpp"
-#include "common/implicit.hpp"
+#include "common/traversal.hpp"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -8,45 +8,6 @@ namespace etch::planar {
 namespace {
 constexpr double infinity = std::numeric_limits<double>::infinity();
 
-// Exact DDA cell intervals: advancing grid indices does not skip any ray segment.
-struct GridWalk {
-    int x, z, sx, sz, corner_step = 0;
-    double entry = 0, tx, tz, dx, dz;
-    GridWalk(Vec p, Vec d) : x(static_cast<int>(std::floor(p.x))), z(static_cast<int>(std::floor(p.z))),
-        sx(d.x > 0 ? 1 : -1), sz(d.z > 0 ? 1 : -1),
-        tx(d.x == 0 ? infinity : (x + (sx > 0) - p.x) / d.x),
-        tz(d.z == 0 ? infinity : (z + (sz > 0) - p.z) / d.z),
-        dx(d.x == 0 ? infinity : 1 / std::abs(d.x)),
-        dz(d.z == 0 ? infinity : 1 / std::abs(d.z)) {}
-    void advance() {
-        // At a grid corner, include both cells touched only at that corner.
-        if (corner_step == 1) { x -= sx; z += sz; corner_step = 2; return; }
-        if (corner_step == 2) { x += sx; tx += dx; tz += dz; corner_step = 0; return; }
-        entry = std::min(tx,tz);
-        if (tx == tz) { x += sx; corner_step = 1; }
-        else if (tx < tz) { x += sx; tx += dx; }
-        else { z += sz; tz += dz; }
-    }
-};
-
-struct Interval { double first = 0, last = infinity; };
-std::optional<Interval> local_interval(Vec p, Vec d, Vec center, double half_width) {
-    Interval interval;
-    for (auto axis : {std::array<double, 3>{p.x, d.x, center.x}, {p.z, d.z, center.z}}) {
-        auto [position, direction, middle] = axis;
-        if (direction == 0) {
-            if (position < middle - half_width || position > middle + half_width) return std::nullopt;
-        } else {
-            double first = (middle - half_width - position) / direction;
-            double last = (middle + half_width - position) / direction;
-            if (first > last) std::swap(first, last);
-            interval.first = std::max(interval.first, first);
-            interval.last = std::min(interval.last, last);
-        }
-    }
-    if (interval.last < interval.first) return std::nullopt;
-    return interval;
-}
 }
 
 std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_origin) {
@@ -59,13 +20,13 @@ std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_orig
     double nearest = infinity;
     std::optional<Cell> mapped;
     for (Vec direction : {normal * -1, normal}) {
-        auto interval = local_interval(point, direction, fit_origin, surface.fit_radius() + 0.5);
+        auto interval = ray_box_interval<2>(point, direction, fit_origin, surface.fit_radius() + 0.5);
         if (!interval) continue;
-        GridWalk walk(point, direction);
-        while (walk.z >= 0 && walk.z < grid.geometry.nz && walk.entry <= interval->last) {
-            if (grid.boundary[grid.index(walk.x, walk.z)] && walk.entry < nearest) {
+        GridWalk<2> walk(point, direction);
+        while (walk.cell[1] >= 0 && walk.cell[1] < grid.geometry.nz && walk.entry <= interval->last) {
+            if (grid.boundary[grid.index(walk.cell[0], walk.cell[1])] && walk.entry < nearest) {
                 nearest = walk.entry;
-                mapped = Cell{grid.wrap(walk.x), walk.z};
+                mapped = Cell{grid.wrap(walk.cell[0]), walk.cell[1]};
                 break;
             }
             walk.advance();
@@ -84,34 +45,38 @@ std::optional<Cell> Transport::reaction_cell(Vec point, Vec normal, Vec fit_orig
             transverse=error;along=std::abs(distance);mapped=Cell{cell%grid.geometry.nx,cell/grid.geometry.nx};
         }
     }
-    if(mapped){++off_normal_mapped_hits;max_mapping_offset=std::max(max_mapping_offset,std::sqrt(transverse));}
+    if(mapped){++diagnostics.off_normal_mapped_hits;diagnostics.max_mapping_offset=std::max(diagnostics.max_mapping_offset,std::sqrt(transverse));}
     return mapped;
 }
 
 std::optional<Hit> Transport::next_hit(const Particle& particle) {
-    Vec p=particle.position,d=particle.direction;int n=surface.resolution();GridWalk walk(p*n,d*n);int nz=grid.geometry.nz*n;
-    while(walk.z>=0&&walk.z<nz) {
-        double start=walk.entry,end=std::min(walk.tx,walk.tz);
+    Vec p=particle.position,d=projection(particle.direction);
+    if(d.x==0&&d.z==0){++diagnostics.periodic_orbits;diagnostics.last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
+    double period=d.z==0?grid.geometry.nx/std::abs(d.x):infinity;
+    double projected_speed=norm(d);
+    int n=surface.resolution();GridWalk<2> walk(p*n,d*n);int nz=grid.geometry.nz*n;
+    while(walk.cell[1]>=0&&walk.cell[1]<nz) {
+        double start=walk.entry,end=walk.exit();
         if(end>start) {
-            const auto& field=surface.field(walk.x,walk.z);
-            Vec a=(p+d*start)*n-Vec{double(walk.x),double(walk.z)},b=(p+d*end)*n-Vec{double(walk.x),double(walk.z)};
+            const auto& field=surface.field(walk.cell[0],walk.cell[1]);
+            Vec a=(p+d*start)*n-Vec{double(walk.cell[0]),double(walk.cell[1])},b=(p+d*end)*n-Vec{double(walk.cell[0]),double(walk.cell[1])};
             for(double root:field.intersections({a.x,a.z},{b.x,b.z})) {
                 double t=start+(end-start)*root;if(t<1e-8)continue;
-                Vec point=p+d*t,relative=point*n-Vec{double(walk.x),double(walk.z)};
+                Vec point=p+d*t,relative=point*n-Vec{double(walk.cell[0]),double(walk.cell[1])};
                 auto gradient=field.gradient({relative.x,relative.z});Vec n{gradient[0],gradient[1]};
                 if(norm(n)==0)continue;
-                Vec normal=unit(n);if(dot(d,normal)>=-1e-10)continue;auto owner=reaction_cell(point,normal,point);
-                if(!owner){++mapping_failures;continue;}
+                Vec normal=unit(n);if(dot(d,normal)>=-1e-10*projected_speed)continue;auto owner=reaction_cell(point,normal,point);
+                if(!owner){++diagnostics.mapping_failures;continue;}
                 int cell=grid.index(owner->x,owner->z);
-                if(grid.index(int(std::floor(point.x)),int(std::floor(point.z)))!=cell)++normal_mapped_hits;
-                return Hit{point,normal,cell};
+                if(grid.index(int(std::floor(point.x)),int(std::floor(point.z)))!=cell)++diagnostics.normal_mapped_hits;
+                return Hit{point,{normal.x,0,normal.z},cell};
             }
         }
         walk.advance();
-        if(d.z==0&&walk.entry>=grid.geometry.nx){++periodic_orbits;last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
+        if(walk.entry>=period){++diagnostics.periodic_orbits;diagnostics.last_end=RayEnd::PeriodicOrbit;return std::nullopt;}
     }
-    last_end=walk.z>=nz?RayEnd::MissedSurface:RayEnd::Escaped;
-    if(last_end==RayEnd::MissedSurface)++interior_exits;
+    diagnostics.last_end=walk.cell[1]>=nz?RayEnd::MissedSurface:RayEnd::Escaped;
+    if(diagnostics.last_end==RayEnd::MissedSurface)++diagnostics.interior_exits;
     return std::nullopt;
 }
 }

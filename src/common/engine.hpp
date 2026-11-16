@@ -36,7 +36,7 @@ public:
             ++stats.particles;
             for(int bounce=0;;++bounce) {
                 auto hit=transport.next_hit(particle);
-                if(!hit) { if(transport.last_end==RayEnd::Escaped)++stats.escaped;break; }
+                if(!hit) { if(transport.diagnostics.last_end==RayEnd::Escaped)++stats.escaped;break; }
                 int cell=hit->cell;
                 double mu=-dot(particle.direction,hit->normal);
                 if(grid.material[cell]==Mask) ++stats.mask_hits;
@@ -88,6 +88,7 @@ public:
         Summary out(directory+"/summary.json");
         out.field("model",reaction->name());
         out.field("surface_representation",std::string("hermite"));
+        out.field("direction_components",3);
         Backend::write_geometry(out,grid.geometry);
         out.field("atoms_per_cell",grid.geometry.atoms_per_cell);
         out.field("seed",settings.seed);out.field("deletion_threshold",grid.geometry.deletion_threshold);
@@ -96,11 +97,11 @@ public:
         out.field("particles",stats.particles);out.field("silicon_hits",stats.silicon_hits);
         out.field("mask_hits",stats.mask_hits);out.field("reflections",stats.reflections);
         out.field("escaped",stats.escaped);out.field("bounce_limit",stats.bounce_limit);
-        out.field("interior_exits",transport.interior_exits);out.field("normal_mapped_hits",transport.normal_mapped_hits);
-        out.field("mapping_failures",transport.mapping_failures);
-        out.field("off_normal_mapped_hits",transport.off_normal_mapped_hits);out.field("max_mapping_offset_cells",transport.max_mapping_offset);
+        out.field("interior_exits",transport.diagnostics.interior_exits);out.field("normal_mapped_hits",transport.diagnostics.normal_mapped_hits);
+        out.field("mapping_failures",transport.diagnostics.mapping_failures);
+        out.field("off_normal_mapped_hits",transport.diagnostics.off_normal_mapped_hits);out.field("max_mapping_offset_cells",transport.diagnostics.max_mapping_offset);
         out.field("pruned_si",stats.pruned_si);out.field("pruned_cl",stats.pruned_cl);
-        out.field("periodic_orbits",transport.periodic_orbits);
+        out.field("periodic_orbits",transport.diagnostics.periodic_orbits);
         out.field("rank_deficient_fits",surface.rank_deficient_fits);out.field("undefined_normal_fits",surface.undefined_normal_fits);
         out.field("captures",reaction->captures);out.field("removed_si",reaction->removed);
         out.field("sicl4_products",reaction->products_sicl4);out.field("initial_si",initial_si);

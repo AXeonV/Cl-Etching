@@ -19,21 +19,14 @@ std::unique_ptr<Reaction> reaction(Arguments& args) {
     std::map<std::string,AngularYield> laws={{"cosine",cosine_yield},{"enhanced",enhanced_yield}};
     return std::make_unique<YieldReaction>(laws.at(args.at("--angular")));
 }
-planar::Source planar_source(const Arguments& args) {
-    double pi=std::acos(-1.0);
-    std::map<std::string,std::function<Distribution()>> factories={
-        {"gaussian",[&]{return gaussian(0,std::stod(args.at("--fwhm"))*pi/180/2.354820045,-pi/2,pi/2);}},
-        {"cosine",[]{return planar::cosine_angle();}},{"normal",[]{return constant(0);}}
+DirectionDistribution direction(const Arguments& args) {
+    std::map<std::string,std::function<DirectionDistribution()>> factories={
+        {"gaussian",[&]{return gaussian_direction(std::stod(args.at("--fwhm"))*std::acos(-1.0)/180/2.354820045);}},
+        {"cosine",[]{return cosine_direction();}},{"normal",[]{return normal_direction();}}
     };
-    return {factories.at(args.at("--angle"))(),energy(args)};
+    return factories.at(args.at("--angle"))();
 }
-spatial::Source spatial_source(const Arguments& args) {
-    std::map<std::string,std::function<spatial::DirectionDistribution()>> factories={
-        {"gaussian",[&]{return spatial::gaussian_direction(std::stod(args.at("--fwhm"))*std::acos(-1.0)/180/2.354820045);}},
-        {"cosine",[]{return spatial::cosine_direction();}},{"normal",[]{return spatial::normal_direction();}}
-    };
-    return {factories.at(args.at("--angle"))(),energy(args)};
-}
+
 template<class Backend> void run(typename Backend::Geometry geometry,typename Backend::Source source,Arguments& args) {
     RunSettings<typename Backend::Geometry> settings{geometry};
     settings.seed=std::stoull(args.at("--seed"));settings.reflections=std::stoi(args.at("--reflect"));
@@ -59,10 +52,10 @@ int main(int argc,char** argv) {
     auto args=parse(argc,argv);int dimension=std::stoi(args.at("--dimension"));
     int nx=std::stoi(args.at("--nx")),nz=std::stoi(args.at("--nz")),z=std::stoi(args.at("--surface-z"));
     int mask=std::stoi(args.at("--mask-thickness")),opening=std::stoi(args.at("--opening"));
-    if(dimension==2)run<planar::Backend>({nx,nz,z,mask,opening},planar_source(args),args);
+    if(dimension==2)run<planar::Backend>({nx,nz,z,mask,opening},planar::Source{direction(args),energy(args)},args);
     else if(dimension==3) {
         int ny=std::stoi(args.at("--ny"));
         int opening_y=args.at("--opening-y").empty()?ny:std::stoi(args.at("--opening-y"));
-        run<spatial::Backend>({nx,ny,nz,z,mask,opening,opening_y},spatial_source(args),args);
+        run<spatial::Backend>({nx,ny,nz,z,mask,opening,opening_y},spatial::Source{direction(args),energy(args)},args);
     } else throw std::invalid_argument("--dimension must be 2 or 3");
 }

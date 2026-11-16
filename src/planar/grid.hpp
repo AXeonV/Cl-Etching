@@ -24,7 +24,7 @@ public:
     int wrap(int x) const { return (x % geometry.nx + geometry.nx) % geometry.nx; }
     int index(int x, int z) const { return z * geometry.nx + wrap(x); }
     Material at(int x, int z) const;
-    int remaining(int index) const;
+    int remaining(int index) const { return site_count(sites[index]); }
     void wrap_position(Vec& point) const { point.x -= geometry.nx*std::floor(point.x/geometry.nx); }
     void remove_empty_cell(int x, int z);
     void refresh(int x0, int z0, int radius);

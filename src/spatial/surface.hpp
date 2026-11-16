@@ -5,14 +5,14 @@
 namespace etch::spatial {
 struct Projection { double u,v,distance; };
 struct Patch {
-    Vec origin,u_axis,v_axis,outward;
+    Vec3 origin,u_axis,v_axis,outward;
     // w = a*u^2 + b*v^2 + c*u*v + d*u + e*v + f.
     double a=0,b=0,c=0,d=0,e=0,f=0;
     bool defined=true;
     double height(double u,double v) const { return a*u*u+b*v*v+c*u*v+d*u+e*v+f; }
-    Vec position(double u,double v) const { return origin+u_axis*u+v_axis*v+outward*height(u,v); }
-    Vec normal(double u,double v) const;
-    Projection project(Vec point) const;
+    Vec3 position(double u,double v) const { return origin+u_axis*u+v_axis*v+outward*height(u,v); }
+    Vec3 normal(double u,double v) const;
+    Projection project(Vec3 point) const;
 };
 class Surface {
     Grid& grid;

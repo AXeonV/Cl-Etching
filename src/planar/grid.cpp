@@ -1,6 +1,5 @@
 #include "grid.hpp"
 #include <algorithm>
-#include <numeric>
 
 namespace etch::planar {
 Grid::Grid(Geometry g) : geometry(g), material(g.nx * g.nz),
@@ -21,9 +20,6 @@ Material Grid::at(int x, int z) const {
     if (z < 0) return Gas;
     if (z >= geometry.nz) return Silicon;
     return static_cast<Material>(material[index(x, z)]);
-}
-int Grid::remaining(int i) const {
-    return std::accumulate(sites[i].begin(), sites[i].end(), 0);
 }
 void Grid::refresh(int x0, int z0, int radius) {
     int zmin = std::max(0, z0 - radius), zmax = std::min(geometry.nz - 1, z0 + radius);

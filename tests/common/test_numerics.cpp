@@ -1,5 +1,8 @@
 #include "common/implicit.hpp"
 #include "common/periodic.hpp"
+#include "common/traversal.hpp"
+#include "common/vector.hpp"
+#include <set>
 #include <iostream>
 #include <stdexcept>
 #include <random>
@@ -63,8 +66,41 @@ void partition_derivatives() {
     blend.add({0.2,-0.3,0.4},{2,2,2},local);blend.add({-0.8,0.7,-0.6},{2,2,2},local);
     auto result=blend.normalized();for(int mask=0;mask<8;++mask)close(result[mask],local[mask]);
 }
+void vectors() {
+    Vec3 x{1,0,0},y{0,1,0};close(norm(cross(x,y)-Vec3{0,0,1}),0);
+    Vec3 d=unit({1,2,3}),n=unit({2,-1,1}),r=reflected(d,n);
+    close(norm(r),1);close(dot(r,n),-dot(d,n));close(norm(reflected(r,n)-d),0);
+}
+void supercover_vertices_and_edges() {
+    GridWalk<3> walk({0.5,0.5,0.5},unit({1,1,1}));std::set<std::array<int,3>> visited;
+    for(int i=0;i<7;++i){walk.advance();visited.insert(walk.cell);}
+    check(visited.size()==7 && visited.count({1,1,1}),"visit all seven vertex-touching cells");
+    for(int mask=1;mask<8;++mask)check(visited.count({mask&1,(mask>>1)&1,(mask>>2)&1}),"vertex supercover subset");
+    GridWalk<3> edge({0.5,0.5,0.5},unit({1,1,0}));visited.clear();
+    for(int i=0;i<3;++i){edge.advance();visited.insert(edge.cell);}
+    check(visited.size()==3 && visited.count({1,1,0}),"edge crossing visits three cells");
+}
+void planar_corner_supercover() {
+    GridWalk<2> walk(std::array<double,2>{0.5,0.5},std::array<double,2>{1,1});
+    std::array<std::array<int,2>,3> expected{{{1,0},{0,1},{1,1}}};
+    for(int i=0;i<3;++i) {
+        walk.advance();check(walk.cell==expected[i],"planar corner cells preserve traversal order");
+        close(walk.entry,0.5);close(walk.exit(),i<2?0.5:1.5);
+    }
+    GridWalk<2> negative(std::array<double,2>{-0.5,0.5},std::array<double,2>{-1,0});
+    negative.advance();check(negative.cell==std::array<int,2>{-2,0},"negative coordinates and zero direction component");
+    close(negative.entry,0.5);close(negative.exit(),1.5);
+}
+void ray_box_clipping() {
+    using Point=std::array<double,2>;
+    auto plane=ray_box_interval<2>(Point{0,0},Point{0.5,0},Point{2,0},1);
+    check(plane.has_value(),"parallel ray inside the box slab");close(plane->first,2);close(plane->last,6);
+    check(!ray_box_interval<2>(Point{0,0},Point{0.5,0},Point{2,3},1),"parallel ray outside the slab");
+    auto volume=ray_box_interval<3>(Vec3{4,0,0},Vec3{-2,0,0},Vec3{0,0,0},1);
+    check(volume.has_value(),"negative ray direction intersects the box");close(volume->first,1.5);close(volume->last,2.5);
+}
 int main(){int failed=0;
-    for(auto test:{bounded_roots,quadratic_reproduction,face_continuity_and_bounds,multiple_surface_crossings,periodic_closure,partition_derivatives}) {
+    for(auto test:{bounded_roots,quadratic_reproduction,face_continuity_and_bounds,multiple_surface_crossings,periodic_closure,partition_derivatives,vectors,supercover_vertices_and_edges,planar_corner_supercover,ray_box_clipping}) {
         try{test();std::cout<<"PASS shared numerical check\n";}catch(const std::exception& error){++failed;std::cerr<<"FAIL "<<error.what()<<'\n';}}
-    std::cout<<6-failed<<"/6 shared numerical groups passed\n";return failed?1:0;
+    std::cout<<10-failed<<"/10 shared numerical groups passed\n";return failed?1:0;
 }

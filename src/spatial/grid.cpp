@@ -16,7 +16,7 @@ Material Grid::at(int x,int y,int z) const {
     if(z>=geometry.nz)return Silicon;
     return static_cast<Material>(material[index(x,y,z)]);
 }
-void Grid::wrap_position(Vec& p) const {
+void Grid::wrap_position(Vec3& p) const {
     p.x-=geometry.nx*std::floor(p.x/geometry.nx);
     p.y-=geometry.ny*std::floor(p.y/geometry.ny);
 }
