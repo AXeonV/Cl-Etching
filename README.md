@@ -1,13 +1,11 @@
 # Cl / Si 刻蚀仿真
 
-支持二维截面和三维体素计算，通过表面捕获、反射、反应和元胞更新推进刻蚀。`--dimension 2|3` 选择几何后端，默认值为 2。二维采用 2D3V，三维采用 3D3V；粒子以三分量单位方向和能量表示运动状态。两种计算共用反应模型、方向分布和逐粒子推进流程，二维位置与表面几何位于 x–z 截面。
+基于蒙特卡洛粒子追踪与元胞更新的 Cl / Si 等离子体刻蚀仿真，支持二维截面和三维形貌演化，模拟粒子与表面的反应、反射及二次碰撞。
 
 ![etching-2d](image/etching-2d.png)
 ![etching-3d](image/etching-3d.png)
 
 ## 项目结构
-
-主要目录与组件如下，连线表示目录包含关系。
 
 ```mermaid
 flowchart LR
@@ -60,234 +58,177 @@ flowchart LR
     Tests --> CliTests["test_cli.py<br/>维度入口与输出格式测试"]
 ```
 
-## 碰撞角、捕获与表面反应
+## 网格与状态
 
-令 $\mathbf d=(d_x,d_y,d_z)$ 为粒子的单位运动方向，$\mathbf n$ 为碰撞点处从固体指向气体的拟合面单位法线。二维截面法线 $(n_x,n_z)$ 在碰撞计算中取 $(n_x,0,n_z)$。$\theta$ 为相对内法线的入射角：
+$x$ 为横向，$z$ 向下；三维增加 $y$。初始硅表面上方设置固定掩膜。`--cell-nm` 给出元胞边长 $h$，默认 2.5 nm；`--surface-z`、`--opening`、`--mask-thickness` 均使用元胞数，物理长度为对应数值乘以 $h$。三维 `--opening-y` 默认等于 `ny`，形成贯通沟槽，也可指定有限矩形开口。
 
-$$
-\mu=\cos\theta=-\mathbf d\cdot\mathbf n,\qquad 0\leq\theta\leq\frac{\pi}{2}.
-$$
+| 状态 | 存储与含义 |
+|---|---|
+| `material` | `uint8`：气体 0、硅 1、掩膜 2 |
+| `sites` | 每格四个 `uint16`，分别记录 Si、SiCl、SiCl₂、SiCl₃；初始有效 Si 位点数为 30 |
+| `boundary`、`surface_cells` | 与气体共边的固体格；二维四邻接，三维六邻接 |
+| 撞击计数 | 每格两个 `uint32`，分别累计首次和反射后撞击 |
+| 横向边界 | 二维 x 周期；三维 x、y 周期 |
 
-硅表面采用捕获概率 $p(\theta)=\mu$。捕获后执行所选表面反应；未捕获的粒子作镜面反射，继续追踪后续碰撞。固定掩膜表面只发生反射。
+数组按 x 最快的顺序连续存储：二维索引为 `z * nx + x`、形状为 `(nz, nx)`；三维索引为 `(z * ny + y) * nx + x`、形状为 `(nz, ny, nx)`。`sites` 在末尾增加长度为 4 的组分轴。
 
-### `yield`：产额模型
+## 粒子入射与碰撞
 
-`--angular cosine` 和 `--angular enhanced` 分别选择于骁论文图 4-5、4-6 中的角度函数：
+二维采用 2D3V，三维采用 3D3V：位置维度由后端确定，粒子均保存三分量单位方向和独立能量。粒子在二维源线或三维源平面上均匀发射；`--particles` 为整个源的总发射数。
 
-$$
-F_A(\theta)=\cos\theta=\mu,
-$$
-
-$$
-F_B(\theta)=(1+4\sin^2\theta)\cos\theta=(5-4\mu^2)\mu.
-$$
-
-$F(\theta)$ 表示每个入射离子的平均硅原子去除数。捕获概率为 $p(\theta)$ 时，捕获事件的条件期望去除量为：
+发射极角 $\alpha$ 相对向下方向定义，方位角 $\varphi$ 均匀分布于 $[0,2\pi)$：
 
 $$
-Y_{\mathrm{capture}}(\theta)=\frac{F(\theta)}{p(\theta)}.
+\mathbf d=(\sin\alpha\cos\varphi,\sin\alpha\sin\varphi,\cos\alpha),\qquad \lVert\mathbf d\rVert=1.
 $$
 
-对条件期望进行随机取整：
+| 选项 | 入射方向分布 |
+|---|---|
+| `--angle gaussian` | 高斯立体角强度 $I(\alpha)\propto\exp[-\alpha^2/(2\sigma^2)]$，$\sigma=\mathrm{FWHM}/2.35482$ |
+| `--angle cosine` | 下半球立体角密度 $\cos\alpha/\pi$ |
+| `--angle normal` | 固定方向 $(0,0,1)$ |
+
+高斯极角取 $[0,\pi/2)$，抽样密度为 $I(\alpha)\sin\alpha$。二维仅沿截面投影推进位置：
 
 $$
-K=\lfloor Y_{\mathrm{capture}}\rfloor+
-\mathrm{Bernoulli}(Y_{\mathrm{capture}}-\lfloor Y_{\mathrm{capture}}\rfloor).
+\mathbf r_{xz}(s)=(x_0,z_0)+s(d_x,d_z).
 $$
 
-实际去除数为 $\min(K,N_{\mathrm{Si,cell}})$。库存充足时，每次表面撞击的期望反应去除量为 $pY_{\mathrm{capture}}=F$。在 $p=\cos\theta$ 的设置下，两条角度函数对应的捕获后期望去除量分别为 $1$ 和 $1+4\sin^2\theta$。删格残量另行统计。
+设 $\mathbf n$ 为从固体指向气体的单位法线。二维将截面法线扩展为 $(n_x,0,n_z)$，用完整三分量方向计算碰撞角和镜面反射：
 
-### `chlorination`：Cl 化反应模型
+$$
+\mu=\cos\theta=-\mathbf d\cdot\mathbf n,\qquad
+\mathbf d'=\mathbf d-2(\mathbf d\cdot\mathbf n)\mathbf n.
+$$
 
-每个被捕获的粒子提供一个 Cl，在碰撞元胞的全部硅位点中等概率选择一个，将其氯化程度推进一级：
+投影保留原有长度；二维反射保持 $d_y$，三分量方向的总长度保持不变。`--energy constant` 使用指定单能，`--energy gaussian` 在正能量范围抽样。当前反应量由角度或氯化状态决定，反射后能量保持不变。
+
+## 表面重建与射线追踪
+
+在目标格周围 ±3 格收集气固边界格中心，按固体邻域质心指向目标中心的方向建立外向轴，进行二次最小二乘拟合。二维和三维的局部图函数分别为：
+
+$$
+v=f(u)=au^2+bu+c,
+$$
+
+$$
+w=f(u,v)=au^2+bv^2+cuv+du+ev+f_0.
+$$
+
+定义气体侧为正的局部函数 $q_i=v-f(u)$ 或 $q_i=w-f(u,v)$，通过紧支撑单位分解合并：
+
+$$
+g=\frac{\sum_i W_iq_i}{\sum_i W_i}.
+$$
+
+$W_i$ 为各轴窗口 $(1-t^2)^4$ 的乘积，$|t|<1$；支撑半宽为拟合半径加 0.5 格，周期轴不超过半个周期。共享节点保存合并函数值、一阶及各轴混合导数；无拟合支持时，由材料标签赋予函数符号、导数取零。节点通过三次张量积 Hermite 插值形成 $C^1$ 连续函数：
+
+$$
+\Phi(\mathbf x)=0,\qquad
+\mathbf n=\frac{\nabla\Phi(\mathbf x)}{\lVert\nabla\Phi(\mathbf x)\rVert}.
+$$
+
+**碰撞位置和反射法线由该重建表面确定。** `--surface-subdivisions` 控制每格沿各轴的几何细分数，默认 1；只改变重建间距 $h/\mathrm{subdivisions}$，材料格及库存保持原尺寸。
+
+射线采用 DDA 遍历，包含经过角点、棱的接触格。射线代入 Hermite 函数后，二维得到最高六次、三维最高九次多项式；Bernstein 界排除无根区间，导数根划分单调区间，二分求根后选最近的气体进入固体交点。
+
+反应元胞依次取：交点所在的表面格、局部支撑内法线穿过的最近表面格、中心到法线垂直距离最小的表面格；最后一种等距时比较沿法线距离。二维水平射线检查完整 x 周期，纯面外方向视为闭合投影；三维水平射线按方向浮点数的二进制表示计算 x–y 共同周期，并可由水平截面的函数界提前排除碰撞。
+
+## 表面反应
+
+硅表面以 $p(\theta)=\mu$ 捕获粒子，捕获后执行反应，未捕获时继续反射追踪。固定掩膜只反射。
+
+### 产额模型 `yield`
+
+`--angular cosine`、`--angular enhanced` 分别使用于骁图 4-5、4-6 的函数：
+
+$$
+F_A(\theta)=\cos\theta=\mu,\qquad F_B(\theta)=(1+4\sin^2\theta)\cos\theta=(5-4\mu^2)\mu.
+$$
+
+$F$ 是每次入射撞击的平均去除量。捕获事件的条件期望为 $Y=F/p$，以随机取整确定去除数：
+
+$$
+K=\lfloor Y\rfloor+\mathrm{Bernoulli}(Y-\lfloor Y\rfloor).
+$$
+
+实际去除 $\min(K,N_{\mathrm{Si,cell}})$。库存充足时，每次撞击的期望反应去除量为 $pY=F$。
+
+### 氯化模型 `chlorination`
+
+每个捕获粒子提供一个 Cl，在全部硅位点中等概率选择一个，将氯化程度推进一级：
 
 $$
 \mathrm{Si}\rightarrow\mathrm{SiCl}\rightarrow\mathrm{SiCl_2}
 \rightarrow\mathrm{SiCl_3}\rightarrow\mathrm{SiCl_4(g)}.
 $$
 
-形成 SiCl₄ 后脱附，硅库存减一。四种固相状态分别保存数量；该模型采用用户指定的四步反应链，`--angular` 参数用于 `yield` 模型。
+形成 SiCl₄ 后脱附，硅库存减一；四种固相组分保存在 `sites` 中。
 
-## 网格与存储
+## 元胞更新与局部平滑
 
-| 项目 | 设置 |
-|---|---|
-| 网格边长 | `--cell-nm` 指定，默认 2.5 nm |
-| 每格初始硅原子数 | 30 |
-| 元胞更新条件 | 剩余硅位点数小于 5 |
-| 局部拟合邻域 | 目标格周围 ±3 格 |
-| 元胞删除候选邻域 | 二维八邻域；三维二十六邻域 |
-| 法线推进与平滑权重比 | $m/n=0.3$ |
-| 横向边界 | 二维 x 周期；三维 x、y 周期 |
+反应格剩余位点数小于 5 时，按刘婉第 3.6.2 节的方法，在原格及相邻硅表面格中选择删除位置：二维八邻域，三维二十六邻域。默认尺度、初始库存和阈值采用于骁第 4.1 节。
 
-默认网格尺度、初始库存和更新阈值采用于骁第 4.1 节的设置；元胞删除位置按刘婉第 3.6.2 节的方法选择。二维后端使用局部曲线，三维后端使用局部曲面。
-
-$x$ 为横向坐标，$z$ 向下。初始硅表面平坦，上方是固定掩膜及其开口。网格数、掩膜尺寸、开口尺寸和入射剂量通过运行参数指定。`--surface-z`、`--mask-thickness`、`--opening` 使用元胞数；对应物理长度为元胞数乘以 `--cell-nm`。每格库存、删格阈值和拟合邻域以元胞定义。
-
-网格使用连续数组。二维索引为 `z * nx + x`，数组形状为 `(nz, nx)`；三维索引为 `(z * ny + y) * nx + x`，数组形状为 `(nz, ny, nx)`：
-
-- `material`：`uint8`；0 为气体、1 为硅、2 为掩膜。
-- `sites`：每格四个 `uint16`，记录 Si、SiCl、SiCl₂、SiCl₃ 的数量。
-- `boundary` 与 `surface_cells`：记录与气体共边的固体元胞。
-- `primary_hits`、`secondary_hits`：`uint32`，累计首次撞击和反射后的撞击。
-
-## 元胞更新与悬挂元胞处理
-
-当反应元胞的剩余库存小于 5 时，在该元胞及其相邻硅表面元胞中选择删除位置：二维取八邻域，三维取二十六邻域。选择同时考虑沿法线推进和减少表面凸起，以降低直接删格产生的悬挂、漂浮结构。
-
-对每个候选元胞计算偏离局部外法线的角度 $\alpha_i$，以及中心到更新前拟合曲线的有符号法向距离 $d_i$，选择评分最小的元胞：
+对候选格计算中心连线与原格局部外法线的夹角 $\alpha_i$，以及格中心到更新前拟合曲线/面的有符号最近点距离 $d_{\mathrm{out},i}$。角度用弧度，距离用格长，气体侧为正；原格的 $\alpha_i=0$。选择评分最小者：
 
 $$
-S_i=m\alpha_i+nd_i,\qquad m/n=0.3.
+S_i=\frac{m}{n}\alpha_i-d_{\mathrm{out},i},\qquad \frac{m}{n}=0.3.
 $$
 
-两种维度均以弧度计算 $\alpha_i$，$d_i$ 以元胞边长为单位；$d_i$ 在曲线固体侧为正、气体侧为负，使气体侧凸起优先参与移除。原待删除元胞的 $\alpha_i=0$，其余候选的角度由两格中心连线与外法线计算。二维通过曲线最近点计算法向距离；三维以多起点 Newton 迭代求解二次曲面的法向投影。
+二维用曲线最近点求距离，三维用多起点 Newton 投影。选中邻格时，将其四组分库存整体搬至原格，再清空选中格并改为气体。原格的阈值残量计入 `pruned_si`、`pruned_cl`；`deleted_cells` 统计删格次数，`relocated_cells` 统计库存搬移次数。实际删除位置附近的边界、局部拟合、候选格、共享节点及 Hermite 缓存同步更新；仅组分变化时复用几何缓存。
 
-若选中邻格，将其四种固相库存完整转移到原待删除元胞，再删除选中格。掩膜保持固定。实际删除位置附近的边界和拟合缓存随之更新。
-
-原待删除元胞的阈值残量分别计入 `pruned_si`、`pruned_cl`，组分转移保持 Si 和结合 Cl 数量不变。库存关系为：
+库存账目满足：
 
 $$
-N_{\mathrm{Si,initial}}=N_{\mathrm{Si,remaining}}+N_{\mathrm{Si,reacted}}+N_{\mathrm{Si,pruned}}.
+N_{\mathrm{Si,initial}}=N_{\mathrm{Si,remaining}}+N_{\mathrm{Si,reacted}}+N_{\mathrm{Si,pruned}},
 $$
-
-逐步氯化模型另外满足：
 
 $$
 N_{\mathrm{Cl,captured}}=N_{\mathrm{Cl,surface}}+4N_{\mathrm{SiCl_4}}+N_{\mathrm{Cl,pruned}}.
 $$
 
-## 入射角与能量
+当前评分约束局部推进与平滑，尚未加入连通性筛选或独立碎片脱离模型。后续策略见 [元胞更新改进设计](docs/cell-update.md)。
 
-二维粒子在源线上均匀发射，三维粒子在源平面上均匀发射。两种计算均保存三分量单位方向 $\mathbf d=(d_x,d_y,d_z)$。二维粒子的位置沿截面投影推进：
+## 构建与使用
 
-$$
-\mathbf r_{xz}(s)=(x_0,z_0)+s(d_x,d_z).
-$$
-
-面外分量 $d_y$ 保存在粒子状态中。二维碰撞角使用完整方向与法线 $(n_x,0,n_z)$ 计算，投影 $(d_x,d_z)$ 保留其原有长度。镜面反射同时更新 $d_x$、$d_z$，并保持 $d_y$；三分量方向的总长度和粒子能量保持不变。
-
-发射极角 $\alpha$ 相对于整体向下方向定义，方位角 $\varphi$ 在 $[0,2\pi)$ 内均匀抽样：
-
-$$
-\mathbf d=(\sin\alpha\cos\varphi,\sin\alpha\sin\varphi,\cos\alpha).
-$$
-
-| 选项 | 方向分布 |
-|---|---|
-| `--angle gaussian` | 轴对称高斯立体角强度 $I(\alpha)\propto\exp[-\alpha^2/(2\sigma^2)]$ |
-| `--angle cosine` | 下半球立体角密度 $\cos\alpha/\pi$ |
-| `--angle normal` | 固定方向 $(0,0,1)$ |
-
-高斯宽度按 $\sigma=\mathrm{FWHM}/2.35482$ 换算，极角抽样密度包含 $\sin\alpha$ 雅可比，取值范围为 $[0,\pi/2)$。`--particles` 表示整条源线或整个源平面的总发射数。
-
-`--energy constant` 使用指定单能，`--energy gaussian` 在正能量范围内作高斯抽样。当前反应量由角度或氯化状态决定；粒子携带抽样能量，镜面反射后能量保持不变。
-
-## 局部拟合与碰撞
-
-局部外向坐标轴（二维 $v$、三维 $w$）取邻域固体元胞几何质心指向目标元胞中心的方向，按刘婉第 3.4.2 节旋转坐标。收集附近气固边界元胞的中心，作二次最小二乘拟合。二维使用：
-
-$$
-v=f(u)=au^2+bu+c.
-$$
-
-三维在两个切向轴和外向轴组成的局部坐标系中使用：
-
-$$
-w=f(u,v)=au^2+bv^2+cuv+du+ev+f_0.
-$$
-
-局部二次曲面的法线由两个偏导数计算：
-
-$$
-\mathbf n=\frac{\mathbf e_w-f_u\mathbf e_u-f_v\mathbf e_v}
-{\lVert\mathbf e_w-f_u\mathbf e_u-f_v\mathbf e_v\rVert}.
-$$
-
-局部二次拟合通过共享节点构成连续的隐式碰撞表面。二维局部函数取 $q_i=v-f(u)$，三维取 $q_i=w-f(u,v)$，正值表示气体侧。重建节点通过紧支撑单位分解合并邻近的 $q_i$，保存合并函数值、一阶导数和各轴混合导数。各轴窗口为 $w(t)=(1-t^2)^4$（$|t|<1$），其中 $t$ 是节点到拟合中心的坐标差除以拟合支撑半宽。周期轴的支撑不超过半个周期。合并函数为 $g=\sum_i w_iq_i/\sum_i w_i$，导数同时包含窗口变化。无拟合支持的节点由材料标签确定符号，函数幅值为拟合半径加一，导数为零。
-
-节点数据通过二维双三次、三维三次张量积 Hermite 插值连接。相邻重建单元共用节点值与导数，使函数及一阶导数连续，碰撞表面定义为：
-
-$$
-\Phi(\mathbf{x})=0,\qquad
-\mathbf{n}=\frac{\nabla\Phi(\mathbf{x})}{\lVert\nabla\Phi(\mathbf{x})\rVert}.
-$$
-
-**碰撞位置和反射法线均由这一重建表面决定。** 局部二次拟合还用于元胞更新的距离与法线评分。`--surface-subdivisions` 指定每个元胞沿各轴的几何细分数，默认为 1；重建间距为元胞边长除以此值，材料元胞及其库存不随几何细分改变。
-
-轨迹采用覆盖网格角点的 DDA 遍历。将射线代入当前重建单元的隐式函数后，二维得到最高六次、三维得到最高九次的一元多项式。用导数的根划分单调区间，再在变号区间二分求根，选取最近的气体侧进入固体侧的交点。Bernstein 系数界用于排除不含零点的单元。粒子从交点按镜面方向继续运动：
-
-$$
-\mathbf{d}'=\mathbf{d}-2(\mathbf{d}\cdot\mathbf{n})\mathbf{n}.
-$$
-
-反应元胞按刘婉第 3.5 节定位：若交点所在格是表面元胞，直接使用该格；否则优先选择交点法线穿过的最近表面元胞。法线未穿过任何表面元胞时，在局部支撑内按元胞中心到法线的垂直距离选取最近者，等距时选沿法线方向距离交点更近的元胞。
-
-局部拟合、重建节点、Hermite 系数与候选表面元胞列表分别缓存。元胞删除后，使所有依赖该处几何的缓存同步失效；仅库存或氯化状态改变时复用几何缓存。
-
-水平射线在周期区域中回到相同位置与方向、且整周期没有碰撞时，结束该粒子的追踪。若水平截面的函数界已能排除任何穿越，也直接结束追踪。周期判定使用方向浮点数的二进制有效数计算共同周期，不设置角度容差或任意的路径长度上限。
-
-## 构建和测试
-
-需要 C++17 编译器、Python、NumPy 和 Matplotlib。
+依赖 C++17、Python、NumPy 和 Matplotlib：
 
 ```bash
 python -m pip install -r requirements.txt
-python -m utils.build
 python -m utils.build --geometry
 python -m unittest discover -s tests -p "test_*.py"
 ```
 
-二维保留原有参数，`--dimension 2` 可以省略。以下大写占位符替换为输入值：
+通过 `--dimension 2|3` 选择二维截面或三维体素后端，默认使用二维。
+
+将大写占位符替换为输入值：
 
 ```text
-build/etch_sim.exe --dimension 2 --cell-nm CELL_NM --model yield --angular cosine --nx NX --nz NZ --surface-z Z0 --opening W --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
+build/etch_sim.exe --dimension DIM --cell-nm H --nx NX --nz NZ --surface-z Z0 --opening W --mask-thickness H_MASK --angle gaussian --fwhm FWHM_DEG --energy-ev E_EV --model yield --angular cosine --particles N --output RUN_DIR
 ```
 
-三维增加 `--ny`。`--opening` 指定 x 向开口宽度；`--opening-y` 默认等于 `ny`，生成沿 y 贯通的沟槽，指定更小值则生成有限矩形开口：
-
-```text
-build/etch_sim.exe --dimension 3 --cell-nm CELL_NM --model yield --angular cosine --nx NX --ny NY --nz NZ --surface-z Z0 --opening WX --opening-y WY --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
-```
-
-`--angular enhanced` 使用增强产额函数；`--model chlorination` 使用单 Cl 反应链。`--reflect 0` 关闭反射追踪；默认不设反射次数上限，`--max-bounces` 设置诊断用的截断次数。
-
-绘制二维结果或三维结果的 y 向截面，三维默认取中间切片，`--slice-y` 指定切片索引：
+三维追加 `--ny NY`，有限矩形开口追加 `--opening-y WY`。`--reflect 0` 关闭反射；`--max-bounces` 默认 0，表示不限反射次数，可设正值做截断诊断。
 
 ```text
 python -m utils.plot RUN_A RUN_B RUN_C --output comparison.png
-```
-
-三维体素剖视图沿 y 方向去掉前半部分，仅用于显示内部沟槽：
-
-```text
 python -m utils.volume RUN_A RUN_B RUN_C --output volume.png
-```
-
-导出原始材料网格供 ParaView 查看：
-
-```text
 python -m utils.export RUN_DIR
 ```
 
-结果为 `RUN_DIR/structure.vti`，仅含气体（0）、硅（1）、掩膜（2）的单元材料标签。坐标单位为 nm，x 原点位于区域中心，z 原点位于初始硅表面，z 正向表示刻蚀深度。二维保存为 x–z 平面网格，沿 y 轴查看；三维保存为体网格。在 ParaView 中按 `material` 着色，用 Threshold 保留 1–2 可显示硅和掩膜，Surface With Edges 可查看元胞边界。
+截面图的三维 y 索引默认取中间层，可用 `--slice-y` 指定。体素图去掉前半 y 区域以展示内部；导出工具生成 `RUN_DIR/structure.vti`，只含 `material` 单元标签。ParaView 坐标单位为 nm，x 原点在区域中心，z 原点在初始硅表面；二维沿 y 轴查看，Threshold 保留 1–2 可显示硅和掩膜。
 
 ## 输出与诊断
 
-`summary.json`、`arguments.txt` 和原始数组保存输入、库存和轨迹统计。`dimension` 标识几何维度，`direction_components` 为 3，三维额外保存 `ny`、`opening_y_cells`。`surface.csv` 保存局部二次拟合的系数与坐标轴。`surface_nodes.bin` 保存连续碰撞表面的节点函数值及混合导数，按 z、y（三维）、x、导数掩码排列，各轴节点数为元胞数乘以几何细分数再加一。`collision_angles.csv` 按 1° 区间记录首次撞击、反射后撞击、捕获与反应去除数；角度均相对于碰撞点的局部法线。
+| 文件 | 内容 |
+|---|---|
+| `summary.json`、`arguments.txt` | 输入及运行统计；`dimension` 为位置维度，`direction_components` 为 3 |
+| `material.bin`、`sites.bin` | 材料与组分数组，布局见网格与状态 |
+| `surface.csv` | 局部二次拟合系数及坐标轴 |
+| `surface_nodes.bin` | Hermite 节点值与混合导数，按 z、y（三维）、x、导数掩码排列；各轴节点数为格数乘细分数再加一 |
+| `primary_hits.bin`、`secondary_hits.bin`、`collision_angles.csv` | 格点撞击计数及按 1° 分箱的首次撞击、二次撞击、捕获和反应去除数 |
 
-- `deleted_cells`：删除的元胞数。
-- `relocated_cells`：选择邻格删除并转移库存的次数。
-- `pruned_si`、`pruned_cl`：阈值删格残量。
-- `interior_exits`：未找到曲线碰撞却从硅片底部离开的漏检轨迹数。
-- `normal_mapped_hits`：交点经过法线投影定位反应元胞的次数。
-- `off_normal_mapped_hits`：法线未穿过表面元胞、通过最近法线距离完成定位的次数。
-- `max_mapping_offset_cells`：上述定位中元胞中心到法线的最大垂直距离，以元胞边长为单位。
-- `mapping_failures`：重建表面的交点无法沿法线定位反应元胞的次数。
-- `periodic_orbits`：闭合周期路径或无可碰撞水平截面结束的粒子数。
-- `rank_deficient_fits`：局部拟合矩阵不满秩的次数。
-- `undefined_normal_fits`：邻域质心与目标中心重合、无法定义旋转轴的拟合次数；对应局部拟合不提供重建节点数据，材料标签仍参与气固区域定义。
+追踪诊断包括 `interior_exits`（未碰撞而从硅片底部退出）、`mapping_failures`（交点无法定位反应格）、`normal_mapped_hits`（映射格不同于交点格）、`off_normal_mapped_hits`（法线未穿过候选格）、`max_mapping_offset_cells`（后一种情况下格中心到法线的最大垂距）和 `periodic_orbits`（无碰撞闭合周期）。`rank_deficient_fits`、`undefined_normal_fits` 分别统计拟合秩不足、质心无法定义外向轴的次数。
 
 ## 扩展
 
-新增表面模型实现 `Reaction::apply(Sites&, ...)`，直接操作单元库存。标量能量分布和三分量方向分布放在 `common`，各维度粒子源定义发射位置。新增几何算法在对应后端实现，通过 `Backend` 提供给共用引擎。维度分派集中在 `app`，反应模型和推进流程不包含维度判断。
+表面反应实现 `Reaction::apply(Sites&, ...)`；方向和能量由分布函数注入；位置、邻接、曲线/曲面及删格候选由后端实现，通过 `Backend` 装配到共用推进器。
