@@ -1,3 +1,4 @@
+#include <cfenv>
 #include "spatial/backend.hpp"
 #include "common/linear.hpp"
 #include <iostream>
@@ -126,6 +127,27 @@ void centroid_degeneracy() {
     check(!surface.patch(16,16,10).defined&&surface.undefined_normal_fits==1,"isolated voxel has no invented normal");
     check(grid.remaining(cell)==12,"retain isolated voxel inventory");
 }
+void undefined_normal_removal() {
+    for (bool symmetric_neighbors : {false, true}) {
+        Grid grid({20,16,40,15,4,10,16});
+        int x=10,y=8,z=6,original=grid.index(x,y,z);
+        grid.material[original]=Silicon;grid.sites[original]={1,1,1,1};
+        if(symmetric_neighbors)for(int dx:{-1,1}) {
+            int cell=grid.index(x+dx,y,z);grid.material[cell]=Silicon;grid.sites[cell]={8,7,6,5};
+        }
+        grid.refresh(x,y,z,3);Surface surface(grid);CellUpdater updater(grid,surface);
+        check(!surface.patch(x,y,z).defined,"symmetric neighborhood has no centroid normal");
+        auto si=grid.silicon_inventory(),cl=grid.chlorine_inventory();
+        std::feclearexcept(FE_ALL_EXCEPT);
+        auto result=updater.remove(original);
+        check(!std::fetestexcept(FE_INVALID|FE_DIVBYZERO),"undefined fit is not projected or normalized");
+        check(result.cell==original&&!result.relocated,"depleted cell is removed without invented normal");
+        check(grid.material[original]==Gas&&grid.remaining(original)==0,"isolated cell is cleared");
+        check(grid.silicon_inventory()+4==si&&grid.chlorine_inventory()+6==cl,"residual states are accounted");
+        if(symmetric_neighbors)for(int dx:{-1,1})check(grid.remaining(grid.index(x+dx,y,z))==26,"neighbors retain inventory");
+    }
+}
+
 int main() {
     std::cout<<std::unitbuf;
     std::vector<std::pair<std::string,std::function<void()>>> tests={
@@ -135,6 +157,7 @@ int main() {
         {"fitted plane and y periodicity",fitted_plane_and_periodic_mapping},{"rational periodic orbit",closed_rational_orbit},{"y reflection and reverse path",reflection_in_y_plane},
         {"corner normal mapping",corner_normal_mapping},{"26-neighbor inventory and cache",neighbor_transfer_and_cache},
         {"solid-angle source distributions",source_solid_angle_distributions},{"shared engine inventory",shared_engine_inventory},
+        {"undefined normal removal",undefined_normal_removal},
         {"centroid degeneracy",centroid_degeneracy}
     };
     int failed=0;for(auto& [name,test]:tests){try{test();std::cout<<"PASS "<<name<<'\n';}

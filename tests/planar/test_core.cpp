@@ -1,5 +1,6 @@
 #include "planar/backend.hpp"
 #include <functional>
+#include <cfenv>
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -317,9 +318,31 @@ void flat_removal_and_fixed_mask() {
     check(masked.material[mask] == Mask, "fixed mask is not a silicon removal candidate");
 }
 
+void undefined_normal_removal() {
+    for (bool symmetric_neighbors : {false, true}) {
+        Grid grid(small_geometry());
+        int x=20,z=10,original=grid.index(x,z);
+        grid.material[original]=Silicon;grid.sites[original]={1,1,1,1};
+        if (symmetric_neighbors) for (int dx : {-1,1}) {
+            int cell=grid.index(x+dx,z);grid.material[cell]=Silicon;grid.sites[cell]={8,7,6,5};
+        }
+        grid.refresh(x,z,3);Surface surface(grid);CellUpdater updater(grid,surface);
+        check(!surface.curve(x,z).defined,"symmetric neighborhood has no centroid normal");
+        auto si=grid.silicon_inventory(),cl=grid.chlorine_inventory();
+        std::feclearexcept(FE_ALL_EXCEPT);
+        auto result=updater.remove(original);
+        check(!std::fetestexcept(FE_INVALID|FE_DIVBYZERO),"undefined fit is not projected or normalized");
+        check(result.cell==original&&!result.relocated,"depleted cell is removed without invented normal");
+        check(grid.material[original]==Gas&&grid.remaining(original)==0,"isolated cell is cleared");
+        check(grid.silicon_inventory()+4==si&&grid.chlorine_inventory()+6==cl,"residual states are accounted");
+        if(symmetric_neighbors)for(int dx:{-1,1})check(grid.remaining(grid.index(x+dx,z))==26,"neighbors retain inventory");
+    }
+}
+
 int main() {
     std::cout << std::unitbuf;
     std::vector<std::pair<std::string, std::function<void()>>> tests = {
+        {"undefined normal removal",undefined_normal_removal},
         {"centroid degeneracy", isolated_cell_has_no_centroid_normal},
         {"normal distance to quadratic curve", curve_normal_distance},
         {"cell removal and inventory transfer", cell_removal_and_inventory_transfer},
