@@ -28,6 +28,7 @@ DirectionDistribution direction(const Arguments& args) {
 }
 
 template<class Backend> void run(typename Backend::Geometry geometry,typename Backend::Source source,Arguments& args) {
+    geometry.cell_nm=std::stod(args.at("--cell-nm"));
     RunSettings<typename Backend::Geometry> settings{geometry};
     settings.seed=std::stoull(args.at("--seed"));settings.reflections=std::stoi(args.at("--reflect"));
     settings.surface_subdivisions=std::stoi(args.at("--surface-subdivisions"));

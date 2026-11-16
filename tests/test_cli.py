@@ -61,6 +61,18 @@ class CommandLineTests(unittest.TestCase):
                 np.testing.assert_allclose(evaluate(run["surface_nodes"], coordinates, 0.5),
                                            16.5 - z, atol=1e-11)
 
+    def test_cell_size_parameter_preserves_grid_state(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
+            for dimension in [2,3]:
+                with self.subTest(dimension=dimension):
+                    original=self.run_case(dimension,"yield",Path(temporary)/f"{dimension}-coarse")
+                    scaled=self.run_case(dimension,"yield",Path(temporary)/f"{dimension}-fine",
+                                         options=("--cell-nm","1"))
+                    self.assertEqual(original["meta"]["cell_nm"],2.5)
+                    self.assertEqual(scaled["meta"]["cell_nm"],1.0)
+                    np.testing.assert_array_equal(original["material"],scaled["material"])
+                    np.testing.assert_array_equal(original["sites"],scaled["sites"])
+
     def test_default_dimension_is_planar(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
             default = self.run_case(2, "yield", Path(temporary) / "default", explicit=False)

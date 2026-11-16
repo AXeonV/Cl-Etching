@@ -10,6 +10,6 @@ class CellUpdater {
     double normal_weight;
 public:
     CellUpdater(Grid& grid, Surface& surface, double normal_weight = 0.3);
-    etch::CellRemoval remove(int cell);
+    CellRemoval remove(int cell);
 };
 }

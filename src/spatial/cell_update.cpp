@@ -1,7 +1,7 @@
 #include "cell_update.hpp"
 #include <algorithm>
 namespace etch::spatial {
-etch::CellRemoval CellUpdater::remove(int original) {
+CellRemoval CellUpdater::remove(int original) {
     Cell p=grid.coordinates(original);Patch patch=surface.patch(p.x,p.y,p.z);
     auto center=patch.project(patch.origin);Vec3 normal=patch.normal(center.u,center.v);
     double best=-center.distance;int selected=original;

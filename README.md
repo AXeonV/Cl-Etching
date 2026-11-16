@@ -48,6 +48,7 @@ flowchart LR
     Spatial --> SpatialBackend["backend.hpp · output.cpp<br/>后端组件装配与三维几何输出"]
 
     Utils --> Build["build.py<br/>编译与测试入口"]
+    Utils --> Export["export.py<br/>ParaView 材料结构导出"]
     Utils --> Results["results.py<br/>结果读取与库存核对"]
     Utils --> Plot["plot.py · volume.py · surface.py<br/>碰撞表面、截面与体素剖视图"]
 
@@ -55,6 +56,7 @@ flowchart LR
     Tests --> TrackingTests["test_tracking.cpp<br/>2D3V 一致性、反向追踪与几何缓存"]
     Tests --> PlanarTests["planar/<br/>二维核心与几何回归测试"]
     Tests --> SpatialTests["spatial/<br/>三维曲面、追踪与库存测试"]
+    Tests --> ExportTests["test_export.py<br/>材料结构导出与物理坐标"]
     Tests --> CliTests["test_cli.py<br/>维度入口与输出格式测试"]
 ```
 
@@ -110,7 +112,7 @@ $$
 
 | 项目 | 设置 |
 |---|---|
-| 网格边长 | 2.5 nm |
+| 网格边长 | `--cell-nm` 指定，默认 2.5 nm |
 | 每格初始硅原子数 | 30 |
 | 元胞更新条件 | 剩余硅位点数小于 5 |
 | 局部拟合邻域 | 目标格周围 ±3 格 |
@@ -118,9 +120,9 @@ $$
 | 法线推进与平滑权重比 | $m/n=0.3$ |
 | 横向边界 | 二维 x 周期；三维 x、y 周期 |
 
-网格尺度、初始库存和更新阈值采用于骁第 4.1 节的设置；元胞删除位置按刘婉第 3.6.2 节的方法选择。二维后端使用局部曲线，三维后端使用局部曲面。
+默认网格尺度、初始库存和更新阈值采用于骁第 4.1 节的设置；元胞删除位置按刘婉第 3.6.2 节的方法选择。二维后端使用局部曲线，三维后端使用局部曲面。
 
-$x$ 为横向坐标，$z$ 向下。初始硅表面平坦，上方是固定掩膜及其开口。网格数、掩膜尺寸、开口尺寸和入射剂量通过运行参数指定。
+$x$ 为横向坐标，$z$ 向下。初始硅表面平坦，上方是固定掩膜及其开口。网格数、掩膜尺寸、开口尺寸和入射剂量通过运行参数指定。`--surface-z`、`--mask-thickness`、`--opening` 使用元胞数；对应物理长度为元胞数乘以 `--cell-nm`。每格库存、删格阈值和拟合邻域以元胞定义。
 
 网格使用连续数组。二维索引为 `z * nx + x`，数组形状为 `(nz, nx)`；三维索引为 `(z * ny + y) * nx + x`，数组形状为 `(nz, ny, nx)`：
 
@@ -233,19 +235,19 @@ $$
 python -m pip install -r requirements.txt
 python -m utils.build
 python -m utils.build --geometry
-python -m unittest discover -s tests -p test_cli.py
+python -m unittest discover -s tests -p "test_*.py"
 ```
 
 二维保留原有参数，`--dimension 2` 可以省略。以下大写占位符替换为输入值：
 
 ```text
-build/etch_sim.exe --dimension 2 --model yield --angular cosine --nx NX --nz NZ --surface-z Z0 --opening W --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
+build/etch_sim.exe --dimension 2 --cell-nm CELL_NM --model yield --angular cosine --nx NX --nz NZ --surface-z Z0 --opening W --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
 ```
 
 三维增加 `--ny`。`--opening` 指定 x 向开口宽度；`--opening-y` 默认等于 `ny`，生成沿 y 贯通的沟槽，指定更小值则生成有限矩形开口：
 
 ```text
-build/etch_sim.exe --dimension 3 --model yield --angular cosine --nx NX --ny NY --nz NZ --surface-z Z0 --opening WX --opening-y WY --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
+build/etch_sim.exe --dimension 3 --cell-nm CELL_NM --model yield --angular cosine --nx NX --ny NY --nz NZ --surface-z Z0 --opening WX --opening-y WY --mask-thickness H --fwhm FWHM_DEG --energy-ev E_EV --particles N --output OUTPUT_DIR
 ```
 
 `--angular enhanced` 使用增强产额函数；`--model chlorination` 使用单 Cl 反应链。`--reflect 0` 关闭反射追踪；默认不设反射次数上限，`--max-bounces` 设置诊断用的截断次数。
@@ -261,6 +263,14 @@ python -m utils.plot RUN_A RUN_B RUN_C --output comparison.png
 ```text
 python -m utils.volume RUN_A RUN_B RUN_C --output volume.png
 ```
+
+导出原始材料网格供 ParaView 查看：
+
+```text
+python -m utils.export RUN_DIR
+```
+
+结果为 `RUN_DIR/structure.vti`，仅含气体（0）、硅（1）、掩膜（2）的单元材料标签。坐标单位为 nm，x 原点位于区域中心，z 原点位于初始硅表面，z 正向表示刻蚀深度。二维保存为 x–z 平面网格，沿 y 轴查看；三维保存为体网格。在 ParaView 中按 `material` 着色，用 Threshold 保留 1–2 可显示硅和掩膜，Surface With Edges 可查看元胞边界。
 
 ## 输出与诊断
 
