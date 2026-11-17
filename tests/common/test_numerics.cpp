@@ -1,4 +1,5 @@
 #include "common/implicit.hpp"
+#include "common/cell_inventory.hpp"
 #include "common/periodic.hpp"
 #include "common/traversal.hpp"
 #include "common/vector.hpp"
@@ -99,8 +100,62 @@ void ray_box_clipping() {
     auto volume=ray_box_interval<3>(Vec3{4,0,0},Vec3{-2,0,0},Vec3{0,0,0},1);
     check(volume.has_value(),"negative ray direction intersects the box");close(volume->first,1.5);close(volume->last,2.5);
 }
+void conservative_cell_inventory() {
+    auto totals=[](const std::vector<Sites>& cells) {
+        std::array<long long,4> result{};
+        for(const auto& sites:cells)for(int state=0;state<4;++state)result[state]+=sites[state];
+        return result;
+    };
+    Random rng(17);
+    std::vector<Sites> sites{{1,1,1,1},{10,4,5,6},{30,0,0,0}};
+    auto before=totals(sites);
+    auto result=transfer_inventory(sites,0,1,{0,2},30,rng);
+    check(result.has_value(),"sufficient capacity admits a conservative update");
+    check(totals(sites)==before,"all four species are conserved during remapping");
+    check(result->redistributed_si==4&&result->redistributed_cl==6,"preserved residual is not a loss");
+    check(sites[0]==Sites{11,5,6,7}&&sites[1]==Sites{}&&sites[2]==Sites{30,0,0,0},"the only available recipient receives all original state counts");
+    sites={{4,0,0,0},{30,0,0,0},{30,0,0,0}};auto unchanged=sites;auto rng_before=rng;
+    result=transfer_inventory(sites,0,1,{0,2},30,rng);
+    check(!result&&sites==unchanged&&rng==rng_before,"a full neighborhood defers geometry without stock or RNG side effects");
+    sites[0]={};result=transfer_inventory(sites,0,1,{0,2},30,rng);
+    check(result.has_value()&&site_count(sites[0])==30&&sites[1]==Sites{},"an empty reaction cell always advances");
+    sites={{1,1,1,1},{30,0,0,0},{27,0,0,0},{29,0,0,0}};before=totals(sites);
+    result=transfer_inventory(sites,0,1,{0,2,3},30,rng);
+    check(result.has_value()&&totals(sites)==before,"split allocation preserves species across several recipients");
+    check(site_count(sites[2])==30&&site_count(sites[3])==30,"all available recipient slots are filled when capacity equals the residual");
+    for(const auto& cell:sites)check(site_count(cell)<=30,"remapping respects the cell capacity");
+    int first=0;
+    for(int i=0;i<1000;++i) {
+        sites={{1,0,0,0},{29,0,0,0},{29,0,0,0}};
+        result=transfer_inventory(sites,0,0,{1,2},30,rng);
+        check(result.has_value(),"a tie has feasible conservative recipients");
+        first+=site_count(sites[1])==30;
+    }
+    check(first>400&&first<600,"symmetric recipients do not acquire a fixed lattice-direction preference");
+}
+
+void free_slot_sampling() {
+    Random rng(19);
+    double delivered=0;
+    for(int i=0;i<10000;++i) {
+        std::vector<Sites> sites{{4,0,0,0},{30,0,0,0},{10,0,0,0},{20,0,0,0}};
+        auto result=transfer_inventory(sites,0,1,{0,2,3},30,rng);
+        check(result.has_value()&&silicon_inventory(sites)==64,"slot sampling preserves inventory");
+        delivered+=sites[2][0]-10;
+    }
+    close(delivered/10000,8.0/3,0.07);
+    std::vector<Sites> sites{{1,1,1,1},{30,0,0,0},{5,6,7,8},{7,8,6,7}};auto before=sites;
+    auto result=transfer_inventory(sites,0,1,{0,2,3},30,rng);
+    check(result.has_value(),"a feasible species remap commits");
+    for(int state=0;state<4;++state) {
+        int a=0,b=0;for(size_t cell=0;cell<sites.size();++cell){a+=before[cell][state];b+=sites[cell][state];}
+        check(a==b,"slot sampling preserves each chlorination state");
+    }
+    for(const auto& cell:sites)check(site_count(cell)<=30,"slot sampling respects recipient capacity");
+}
+
 int main(){int failed=0;
-    for(auto test:{bounded_roots,quadratic_reproduction,face_continuity_and_bounds,multiple_surface_crossings,periodic_closure,partition_derivatives,vectors,supercover_vertices_and_edges,planar_corner_supercover,ray_box_clipping}) {
+    for(auto test:{free_slot_sampling,conservative_cell_inventory,bounded_roots,quadratic_reproduction,face_continuity_and_bounds,multiple_surface_crossings,periodic_closure,partition_derivatives,vectors,supercover_vertices_and_edges,planar_corner_supercover,ray_box_clipping}) {
         try{test();std::cout<<"PASS shared numerical check\n";}catch(const std::exception& error){++failed;std::cerr<<"FAIL "<<error.what()<<'\n';}}
-    std::cout<<10-failed<<"/10 shared numerical groups passed\n";return failed?1:0;
+    std::cout<<12-failed<<"/12 shared numerical groups passed\n";return failed?1:0;
 }

@@ -28,7 +28,7 @@ def load_run(directory):
 
 def inventory_errors(run):
     meta = run["meta"]
-    silicon = int(run["sites"].sum()) + meta["removed_si"] + meta["pruned_si"] - meta["initial_si"]
+    silicon = int(run["sites"].sum()) + meta["removed_si"] + meta.get("pruned_si",0) + meta.get("detached_si",0) - meta["initial_si"]
     chlorine = (int((run["sites"] * np.arange(4)).sum()) + 4 * meta["sicl4_products"]
-                + meta["pruned_cl"] - meta["captures"]) if meta["model"] == "chlorination" else None
+                + meta.get("pruned_cl",0) + meta.get("detached_cl",0) - meta["captures"]) if meta["model"] == "chlorination" else None
     return {"silicon": silicon, "chlorine": chlorine}

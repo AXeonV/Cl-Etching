@@ -20,6 +20,9 @@ Geometry small_geometry() {
 Settings small_settings() { Settings s{small_geometry()}; s.max_bounces = 500; return s; }
 Source beam() { return {normal_direction(), constant(100)}; }
 
+CellRemoval update_cell(CellUpdater& updater,const Grid& grid,int cell,Vec3 normal) {
+    return updater.remove(cell,normal,{cell%grid.geometry.nx+0.5,cell/grid.geometry.nx+0.5});
+}
 void angular_functions() {
     close(cosine_yield(1), 1); close(cosine_yield(0), 0);
     close(enhanced_yield(1), 1); close(enhanced_yield(0), 0);
@@ -228,9 +231,9 @@ void inventories_and_repeatability() {
         Simulation a(small_settings(), beam(), make()), b(small_settings(), beam(), make());
         a.advance(15000); b.advance(15000);
         check(a.grid.sites == b.grid.sites && a.grid.material == b.grid.material, "repeatable seed");
-        check(a.grid.silicon_inventory() + a.reaction->removed + a.stats.pruned_si == a.initial_si, "Si inventory");
+        check(a.grid.silicon_inventory() + a.reaction->removed + a.stats.detached_si == a.initial_si, "Si inventory");
         if (model == 1) check(a.reaction->captures == a.grid.chlorine_inventory()
-            + 4 * a.reaction->products_sicl4 + a.stats.pruned_cl, "Cl inventory");
+            + 4 * a.reaction->products_sicl4 + a.stats.detached_cl, "Cl inventory");
     }
 }
 void fit_cache_updates() {
@@ -275,24 +278,25 @@ void curve_normal_distance() {
 void cell_removal_and_inventory_transfer() {
     for (int x : {20, 0}) {
         Geometry g = small_geometry(); g.opening = g.nx;
-        Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
+        Grid grid(g); Surface surface(grid); CellUpdater updater(grid,surface);
         int original = grid.index(x, 20), protrusion = grid.index(x-1, 19);
         grid.sites[original] = {1, 1, 1, 1};
         grid.material[protrusion] = Silicon;
         std::array<uint16_t, 4> inventory{10, 4, 5, 6};
         grid.sites[protrusion] = inventory;
+        int intermediate=grid.index(x-1,20);Sites near_inventory{6,7,8,9};grid.sites[intermediate]=near_inventory;
         grid.refresh(x, 20, 3);
         long long si = grid.silicon_inventory(), cl = grid.chlorine_inventory();
         surface.curve(x-1, 20); auto fits = surface.fit_count;
-        auto removal = updater.remove(grid.index(x,20));
+        auto removal = update_cell(updater,grid,grid.index(x,20),{0,0,-1});
         check(removal.relocated && removal.cell == protrusion,
               "remove protruding neighbor rather than create a hole beneath it");
-        check(grid.sites[original] == inventory && grid.material[original] == Silicon,
-              "transfer all four chlorination states into the underfilled cell");
+        check(grid.sites[original] == Sites{11,5,6,7} && grid.sites[intermediate] == near_inventory && grid.material[original] == Silicon,
+              "move donor and preserve residual states without changing full intermediate cells");
         check(grid.material[protrusion] == Gas && grid.remaining(protrusion) == 0,
               "selected protrusion becomes gas");
-        check(grid.silicon_inventory()+4 == si && grid.chlorine_inventory()+6 == cl,
-              "only the original subthreshold residual leaves the inventory");
+        check(grid.silicon_inventory() == si && grid.chlorine_inventory() == cl,
+              "all Si and Cl survive conservative relocation");
         surface.curve(x-1, 20);
         check(surface.fit_count > fits, "invalidate fits around the actual removal location");
         for (int z = 18; z <= 22; ++z) for (int dx = -2; dx <= 2; ++dx) {
@@ -305,17 +309,172 @@ void cell_removal_and_inventory_transfer() {
 }
 void flat_removal_and_fixed_mask() {
     Geometry g = small_geometry(); g.opening = g.nx;
-    Grid grid(g); Surface surface(grid); CellUpdater updater(grid, surface);
+    Grid grid(g); Surface surface(grid); CellUpdater updater(grid,surface);
     grid.sites[grid.index(20,20)] = {};
-    auto removal = updater.remove(grid.index(20,20));
+    auto removal = update_cell(updater,grid,grid.index(20,20),{0,0,-1});
     check(!removal.relocated && removal.cell == grid.index(20,20),
           "flat surface advances at the underfilled cell");
     Grid masked(g); int mask = masked.index(19,19);
     masked.material[mask] = Mask; masked.refresh(20,20,3);
     Surface masked_surface(masked); CellUpdater masked_updater(masked,masked_surface);
     masked.sites[masked.index(20,20)] = {};
-    masked_updater.remove(masked.index(20,20));
+    update_cell(masked_updater,masked,masked.index(20,20),{0,0,-1});
     check(masked.material[mask] == Mask, "fixed mask is not a silicon removal candidate");
+}
+
+void connected_donor_selection() {
+    Random selection_rng(17);
+    for(int x:{8,0}) {
+        Grid grid({16,24,20,0,16});
+        std::fill(grid.material.begin(),grid.material.end(),Gas);
+        std::fill(grid.sites.begin(),grid.sites.end(),Sites{});
+        int z=8,bridge=grid.index(x,z),leaf=grid.index(x-1,z);
+        for(int dx:{-1,0,1})grid.material[grid.index(x+dx,z)]=Silicon;
+        RemovalConnectivity<Grid> connectivity(grid);
+        check(!connectivity.preserves_connection(bridge),"cutting a neck would detach a solid branch");
+        std::vector<RemovalCandidate> candidates{{bridge,-1},{leaf,0}};
+        check(connectivity.select(candidates,selection_rng).cell==leaf,"redirect removal to a connected leaf");
+        check(connectivity.select(candidates,selection_rng).redirected&&connectivity.select(candidates,selection_rng).connected,"record topology redirection");
+        candidates={{bridge,0}};
+        check(connectivity.select(candidates,selection_rng).cell==bridge&&!connectivity.select(candidates,selection_rng).connected,
+              "an unavoidable physical neck break still advances");
+        for(int zz=4;zz<z;++zz)for(int dx:{-1,1})grid.material[grid.index(x+dx,zz)]=Silicon;
+        for(int dx=-1;dx<=1;++dx)grid.material[grid.index(x+dx,4)]=Silicon;
+        check(connectivity.preserves_connection(bridge),"distant alternate path avoids a false local disconnection, including x seam");
+    }
+    Grid grid({16,24,20,0,16});std::fill(grid.material.begin(),grid.material.end(),Gas);
+    int original=grid.index(8,8),attached=grid.index(7,8),diagonal=grid.index(9,7),mask=grid.index(9,8);
+    grid.material[original]=grid.material[attached]=grid.material[diagonal]=Silicon;grid.material[mask]=Mask;
+    RemovalConnectivity<Grid> connectivity(grid);
+    auto branch=connectivity.local_silicon_branch(original,{original,attached,diagonal,mask});
+    check(branch.cells.size()==2&&branch.contains(attached),"stock cannot cross a gas gap or fixed mask");
+}
+
+void collision_normal_at_symmetric_branch() {
+    for(int sign:{-1,1}) {
+        Grid grid({20,32,24,0,20});
+        std::fill(grid.material.begin(),grid.material.end(),Gas);
+        std::fill(grid.sites.begin(),grid.sites.end(),Sites{});
+        auto cell=[&](int x){return grid.index(x,8);};
+        for(int x=7;x<=9;++x){grid.material[cell(x)]=Silicon;grid.sites[cell(x)]={26,0,0,0};}
+        grid.sites[cell(8)]={1,1,1,1};grid.refresh(8,8,4);
+        Surface surface(grid);CellUpdater updater(grid,surface);
+        auto result=update_cell(updater,grid,cell(8),{double(sign),0,0});
+        check(result.cell==cell(8+sign),"collision normal orients removal when the local centroid is symmetric");
+        check(updater.diagnostics.undefined_fit_removals==1&&updater.diagnostics.unavoidable_splits==0,"singular local fit retains surface connection");
+    }
+}
+
+void fragment_release_and_anchors() {
+    Grid grid({20,32,24,0,20});
+    std::fill(grid.material.begin(),grid.material.end(),Gas);
+    std::fill(grid.sites.begin(),grid.sites.end(),Sites{});
+    auto cell=[&](int z){return grid.index(8,z);};
+    for(int z=5;z<=11;++z){grid.material[cell(z)]=Silicon;grid.sites[cell(z)]={6,7,8,9};}
+    grid.material[cell(12)]=Mask;grid.sites[cell(8)]={};grid.refresh(8,8,8);
+    Surface surface(grid);CellUpdater updater(grid,surface);
+    for(int zz=4;zz<=9;++zz)for(int xx=7;xx<=9;++xx)surface.node(xx,zz);
+    auto si=grid.silicon_inventory(),cl=grid.chlorine_inventory();
+    auto removal=update_cell(updater,grid,cell(8),{0,0,-1});
+    check(removal.cell==cell(7)&&removal.detached_cells==2,"a real neck break releases the unanchored component");
+    check(removal.detached_si==60&&removal.detached_cl==100,"released fragment states are accounted separately from reaction products");
+    check(grid.silicon_inventory()+removal.detached_si==si,"Si closes after fracture");
+    check(grid.chlorine_inventory()+removal.detached_cl==cl,"bound Cl closes after fracture");
+    check(grid.material[cell(5)]==Gas&&grid.material[cell(6)]==Gas&&grid.material[cell(12)]==Mask,"release only the unsupported branch");
+    Surface fresh(grid);
+    for(int zz=4;zz<=9;++zz)for(int xx=7;xx<=9;++xx) {
+        auto cached=surface.node(xx,zz),expected=fresh.node(xx,zz);
+        for(size_t derivative=0;derivative<cached.size();++derivative)close(cached[derivative],expected[derivative],1e-12);
+    }
+    RemovalConnectivity<Grid> connectivity(grid);
+    check(connectivity.detached_components(cell(7)).empty(),"fragment release reaches a fixed point");
+    grid.material[cell(5)]=Mask;
+    for(int z:{6,7})grid.material[cell(z)]=Silicon;
+    grid.material[cell(8)]=Gas;
+    check(connectivity.detached_components(cell(8)).empty(),"separate components attached to different fixed anchors both survive");
+}
+
+void conservative_update_defers_geometry() {
+    Grid grid({20,32,12,0,20});int original=grid.index(10,12);grid.sites[original]={1,1,1,1};
+    Surface surface(grid);CellUpdater updater(grid,surface,0.3,17);
+    surface.curve(10,12);auto fits=surface.fit_count;auto before=grid.sites;auto material=grid.material;
+    auto pending=update_cell(updater,grid,original,{0,0,-1});
+    check(pending.reaction_cells==0&&pending.detached_cells==0,"capacity shortage causes no geometric or inventory loss");
+    check(grid.sites==before&&grid.material==material&&surface.fit_count==fits,"deferred updates preserve inventory and geometry caches");
+    check(updater.diagnostics.deferred_updates==1,"defer is recorded separately from a committed deletion");
+    grid.sites[original]={};
+    auto committed=update_cell(updater,grid,original,{0,0,-1});
+    check(committed.reaction_cells==1&&grid.material[original]==Gas,"empty cell still advances after a deferred update");
+}
+
+void unbiased_candidate_ties_and_capacity_support() {
+    Grid grid({20,32,12,0,20});
+    auto cell=[&](int x){return grid.index(x,12);};
+    RemovalConnectivity<Grid> connectivity(grid);Random rng(23);
+    int first=0;
+    for(int i=0;i<1000;++i) {
+        std::vector<RemovalCandidate> candidates{{cell(9),0,1},{cell(9),0,1},{cell(11),0,1}};
+        first+=connectivity.select(candidates,rng).cell==cell(9);
+    }
+    check(first>400&&first<600,"periodic aliases do not bias otherwise equivalent deletion choices");
+    std::vector<RemovalCandidate> candidates{{cell(9),0,4},{cell(11),0,1}};auto before_rng=rng;
+    check(connectivity.select(candidates,rng).cell==cell(11)&&rng==before_rng,"minimize transport among equal geometric scores without unnecessary RNG draws");
+    grid.sites[cell(10)]={1,1,1,1};grid.sites[cell(12)]={25,0,0,0};
+    Surface surface(grid);
+    CellUpdater local(grid,surface,0.3,17);
+    auto pending=update_cell(local,grid,cell(10),{0,0,-1});
+    check(pending.reaction_cells==0,"strictly local remapping defers when its own volume is full");
+
+}
+
+void connectivity_matches_global_components() {
+    Grid grid({7,9,5,0,7});Random rng(77);RemovalConnectivity<Grid> connectivity(grid);
+    auto components=[&](int removed) {
+        std::vector<bool> seen(grid.material.size());int count=0;
+        for(size_t seed=0;seed<grid.material.size();++seed)if(int(seed)!=removed&&grid.material[seed]!=Gas&&!seen[seed]) {
+            ++count;std::vector<int> queue{int(seed)};seen[seed]=true;
+            for(size_t i=0;i<queue.size();++i)for(int neighbor:grid.face_neighbors(queue[i])) {
+                if(neighbor>=0&&neighbor!=removed&&grid.material[neighbor]!=Gas&&!seen[neighbor]) {seen[neighbor]=true;queue.push_back(neighbor);}
+            }
+        }
+        return count;
+    };
+    for(int sample=0;sample<500;++sample) {
+        for(auto& material:grid.material){double value=uniform(rng);material=value<0.4?Silicon:value<0.45?Mask:Gas;}
+        int before=components(-1),checked=0;
+        for(size_t n=0;n<grid.material.size()&&checked<5;++n) {
+            int cell=int((n+sample)%grid.material.size());if(grid.material[cell]!=Silicon)continue;
+            check(connectivity.preserves_connection(cell)==(components(cell)<=before),"multi-source decision equals full component enumeration");
+            ++checked;
+        }
+    }
+}
+
+void collision_projection_and_periodic_image() {
+    std::array<int,2> chosen{};
+    for(int side=0;side<2;++side) {
+        Grid grid({40,80,10,0,40});
+        for(int z=0;z<80;++z)for(int x=0;x<40;++x) {
+            int cell=grid.index(x,z),top=std::max(0,32-(x-20)*(x-20));
+            grid.material[cell]=z>=top?Silicon:Gas;grid.sites[cell]=z>=top?Sites{30,0,0,0}:Sites{};
+        }
+        for(int x:{19,21}){int cell=grid.index(x,30);grid.material[cell]=Silicon;grid.sites[cell]={30,0,0,0};}
+        int original=grid.index(20,32);grid.sites[original]={};grid.refresh(20,40,80);
+        Surface surface(grid);Curve curve=surface.curve(20,32);
+        Vec point=curve.position(side==0?-0.3:0.3);
+        CellUpdater updater(grid,surface);
+        chosen[side]=updater.remove(original,{0,0,-1},point).cell;
+    }
+    check(chosen[0]!=chosen[1]&&chosen[0]%40+chosen[1]%40==40,"the actual contact projection selects reflected counterparts on a curved floor");
+    Geometry g{40,80,20,0,40};Grid a(g),b(g);
+    for(auto* grid:{&a,&b}) {
+        int tip=grid->index(-1,19);grid->material[tip]=Silicon;grid->sites[tip]={30,0,0,0};
+        grid->sites[grid->index(0,20)]={};grid->refresh(0,20,4);
+    }
+    Surface sa(a),sb(b);CellUpdater ua(a,sa),ub(b,sb);
+    ua.remove(a.index(0,20),{0,0,-1},{0.25,20.5});
+    ub.remove(b.index(0,20),{0,0,-1},{40.25,20.5});
+    check(a.material==b.material&&a.sites==b.sites,"equivalent periodic contacts have identical updates");
 }
 
 void undefined_normal_removal() {
@@ -330,18 +489,32 @@ void undefined_normal_removal() {
         check(!surface.curve(x,z).defined,"symmetric neighborhood has no centroid normal");
         auto si=grid.silicon_inventory(),cl=grid.chlorine_inventory();
         std::feclearexcept(FE_ALL_EXCEPT);
-        auto result=updater.remove(original);
+        auto result=update_cell(updater,grid,original,{0,0,-1});
         check(!std::fetestexcept(FE_INVALID|FE_DIVBYZERO),"undefined fit is not projected or normalized");
-        check(result.cell==original&&!result.relocated,"depleted cell is removed without invented normal");
-        check(grid.material[original]==Gas&&grid.remaining(original)==0,"isolated cell is cleared");
-        check(grid.silicon_inventory()+4==si&&grid.chlorine_inventory()+6==cl,"residual states are accounted");
-        if(symmetric_neighbors)for(int dx:{-1,1})check(grid.remaining(grid.index(x+dx,z))==26,"neighbors retain inventory");
+        if(symmetric_neighbors) {
+            check(result.cell!=original&&result.relocated,"a symmetric connected structure uses the collision normal and topology");
+            check(updater.diagnostics.unavoidable_splits==0,"undefined centroid does not force a neck break");
+        } else {
+            check(result.cell==original&&grid.material[original]==Gas&&grid.remaining(original)==0,"a true singleton is cleared");
+            check(result.reaction_cells==0&&result.detached_si==4&&result.detached_cl==6,
+                  "a singleton leaves as solid fragment inventory rather than chemical residual");
+        }
+        check(grid.silicon_inventory()+result.detached_si==si&&grid.chlorine_inventory()+result.detached_cl==cl,"Si and bound Cl close for connected and isolated updates");
+        if(symmetric_neighbors)check(grid.remaining(original)>=26&&grid.remaining(original)<=30,"the surviving branch retains donor inventory plus conserved residual states");
     }
 }
+
 
 int main() {
     std::cout << std::unitbuf;
     std::vector<std::pair<std::string, std::function<void()>>> tests = {
+        {"actual collision projection and periodic image",collision_projection_and_periodic_image},
+        {"multi-source connectivity equivalence",connectivity_matches_global_components},
+        {"unbiased choices and capacity support",unbiased_candidate_ties_and_capacity_support},
+        {"conservative deferred geometry",conservative_update_defers_geometry},
+        {"fragment inventory and fixed anchors",fragment_release_and_anchors},
+        {"collision normal at symmetric branch",collision_normal_at_symmetric_branch},
+        {"connected inventory donor selection",connected_donor_selection},
         {"undefined normal removal",undefined_normal_removal},
         {"centroid degeneracy", isolated_cell_has_no_centroid_normal},
         {"normal distance to quadratic curve", curve_normal_distance},

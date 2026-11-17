@@ -2,6 +2,7 @@
 #include "common/vector.hpp"
 #include "common/material.hpp"
 #include <vector>
+#include <array>
 #include <set>
 namespace etch::spatial {
 struct Geometry {
@@ -21,6 +22,8 @@ public:
     int wrap_y(int y) const { return (y%geometry.ny+geometry.ny)%geometry.ny; }
     int index(int x,int y,int z) const { return (z*geometry.ny+wrap_y(y))*geometry.nx+wrap_x(x); }
     Cell coordinates(int cell) const { return {cell%geometry.nx,(cell/geometry.nx)%geometry.ny,cell/(geometry.nx*geometry.ny)}; }
+    std::array<int,6> face_neighbors(int cell) const;
+    bool is_anchor(int cell) const { return material[cell]==Mask||coordinates(cell).z==geometry.nz-1; }
     Material at(int x,int y,int z) const;
     int remaining(int cell) const { return site_count(sites[cell]); }
     void wrap_position(Vec3& p) const;

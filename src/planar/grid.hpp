@@ -23,6 +23,8 @@ public:
     explicit Grid(Geometry geometry);
     int wrap(int x) const { return (x % geometry.nx + geometry.nx) % geometry.nx; }
     int index(int x, int z) const { return z * geometry.nx + wrap(x); }
+    std::array<int,4> face_neighbors(int cell) const;
+    bool is_anchor(int cell) const { return material[cell]==Mask||cell/geometry.nx==geometry.nz-1; }
     Material at(int x, int z) const;
     int remaining(int index) const { return site_count(sites[index]); }
     void wrap_position(Vec& point) const { point.x -= geometry.nx*std::floor(point.x/geometry.nx); }

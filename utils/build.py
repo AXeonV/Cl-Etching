@@ -22,6 +22,8 @@ def build(target="simulation"):
     }[target]
     executable = BUILD / name
     inputs = [*sources, *ROOT.glob("src/**/*.hpp")]
+    if target != "simulation":
+        inputs.extend(ROOT.glob("tests/**/*.hpp"))
     if not executable.exists() or any(p.stat().st_mtime > executable.stat().st_mtime for p in inputs):
         subprocess.run(["g++", "-std=c++17", "-O3", "-Wall", "-Wextra", "-I", str(ROOT / "src"),
                         *map(str, sources), "-o", str(executable)], check=True, cwd=ROOT)

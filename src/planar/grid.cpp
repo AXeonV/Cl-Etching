@@ -16,6 +16,10 @@ Grid::Grid(Geometry g) : geometry(g), material(g.nx * g.nz),
     }
     refresh(g.nx / 2, g.nz / 2, std::max(g.nx, g.nz));
 }
+std::array<int,4> Grid::face_neighbors(int cell) const {
+    int x=cell%geometry.nx,z=cell/geometry.nx;
+    return {index(x-1,z),index(x+1,z),z>0?index(x,z-1):-1,z+1<geometry.nz?index(x,z+1):-1};
+}
 Material Grid::at(int x, int z) const {
     if (z < 0) return Gas;
     if (z >= geometry.nz) return Silicon;

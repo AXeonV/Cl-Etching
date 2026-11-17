@@ -73,6 +73,20 @@ class CommandLineTests(unittest.TestCase):
                     np.testing.assert_array_equal(original["material"],scaled["material"])
                     np.testing.assert_array_equal(original["sites"],scaled["sites"])
 
+    def test_inventory_update_invariants(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
+            for dimension in [2,3]:
+                for model in ["yield","chlorination"]:
+                    with self.subTest(dimension=dimension,model=model):
+                        run=self.run_case(dimension,model,Path(temporary)/f"{dimension}-{model}")
+                        self.assertEqual(run["meta"]["inventory_update"],"conservative")
+                        self.assertEqual(run["meta"]["inventory_remap"],"slots")
+                        self.assertEqual(run["meta"]["update_geometry"],"oriented_quadratic")
+                        self.assertEqual(inventory_errors(run)["silicon"],0)
+                        if model=="chlorination":self.assertEqual(inventory_errors(run)["chlorine"],0)
+                        self.assertTrue((run["sites"][run["material"]==1].sum(axis=-1)>0).all())
+                        self.assertTrue((run["sites"].sum(axis=-1)<=30).all())
+
     def test_default_dimension_is_planar(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "build") as temporary:
             default = self.run_case(2, "yield", Path(temporary) / "default", explicit=False)

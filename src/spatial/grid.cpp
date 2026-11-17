@@ -11,6 +11,11 @@ Grid::Grid(Geometry g):geometry(g),material(g.nx*g.ny*g.nz),boundary(material.si
     }
     refresh(g.nx/2,g.ny/2,g.nz/2,std::max({g.nx,g.ny,g.nz}));
 }
+std::array<int,6> Grid::face_neighbors(int cell) const {
+    Cell p=coordinates(cell);
+    return {index(p.x-1,p.y,p.z),index(p.x+1,p.y,p.z),index(p.x,p.y-1,p.z),index(p.x,p.y+1,p.z),
+            p.z>0?index(p.x,p.y,p.z-1):-1,p.z+1<geometry.nz?index(p.x,p.y,p.z+1):-1};
+}
 Material Grid::at(int x,int y,int z) const {
     if(z<0)return Gas;
     if(z>=geometry.nz)return Silicon;

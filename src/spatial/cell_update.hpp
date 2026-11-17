@@ -1,13 +1,19 @@
 #pragma once
-#include "common/material.hpp"
+#include "common/cell_update.hpp"
 #include "surface.hpp"
+
 namespace etch::spatial {
 class CellUpdater {
+public:
+    CellUpdateDiagnostics diagnostics;
+private:
     Grid& grid;
     Surface& surface;
     double normal_weight;
+    CellUpdate<Grid> update;
+    void erase(int cell);
 public:
-    CellUpdater(Grid& grid,Surface& surface,double normal_weight=0.3):grid(grid),surface(surface),normal_weight(normal_weight) {}
-    CellRemoval remove(int cell);
+    CellUpdater(Grid& grid,Surface& surface,double normal_weight=0.3,unsigned long long seed=42);
+    CellRemoval remove(int cell,Vec3 collision_normal,Vec3 collision_position);
 };
 }

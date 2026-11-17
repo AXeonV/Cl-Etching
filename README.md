@@ -2,8 +2,7 @@
 
 基于蒙特卡洛粒子追踪与元胞更新的 Cl / Si 等离子体刻蚀仿真，支持二维截面和三维形貌演化，模拟粒子与表面的反应、反射及二次碰撞。
 
-![etching-2d](image/etching-2d.png)
-![etching-3d](image/etching-3d.png)
+![etching-2d](image/etching-2d-10A.png)
 
 ## 项目结构
 
@@ -21,7 +20,9 @@ flowchart LR
     Src --> Spatial["spatial/<br/>三维体素后端，etch::spatial"]
 
     Common --> Engine["engine.hpp · events.hpp<br/>逐粒子推进、运行设置与统计"]
-    Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应、位点库存与迁移"]
+    Common --> Reaction["reaction.hpp/.cpp · material.hpp<br/>表面反应与材料状态"]
+    Common --> CellUpdate["cell_update.hpp · connectivity.hpp<br/>连通性筛选、更新提交与碎片释放"]
+    Common --> CellInventory["cell_inventory.hpp<br/>四态库存守恒重映射"]
     Common --> Random["random.hpp · direction.hpp<br/>随机数、标量分布与三分量方向分布"]
     Common --> Particle["particle.hpp<br/>粒子状态与三分量碰撞法线"]
     Common --> Vector["vector.hpp<br/>空间向量与镜面反射"]
@@ -33,7 +34,7 @@ flowchart LR
     Planar --> PlanarGrid["grid.hpp/.cpp<br/>二维网格与四邻接边界"]
     Planar --> PlanarSurface["surface.hpp/.cpp<br/>局部二次曲线与连续隐式表面"]
     Planar --> PlanarTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
-    Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>八邻域删格选择与几何更新"]
+    Planar --> PlanarUpdate["cell_update.hpp/.cpp<br/>二维局部候选、曲线评分与缓存失效"]
     Planar --> PlanarSource["source.hpp<br/>二维源线粒子发射"]
     Planar --> PlanarVector["vector.hpp<br/>截面向量与方向投影"]
     Planar --> PlanarBackend["backend.hpp · output.cpp<br/>后端组件装配与二维几何输出"]
@@ -41,7 +42,7 @@ flowchart LR
     Spatial --> SpatialGrid["grid.hpp/.cpp<br/>三维网格与六邻接边界"]
     Spatial --> SpatialSurface["surface.hpp/.cpp<br/>局部二次曲面与连续隐式表面"]
     Spatial --> SpatialTransport["transport.hpp/.cpp<br/>射线追踪与反应元胞定位"]
-    Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>二十六邻域删格选择与几何更新"]
+    Spatial --> SpatialUpdate["cell_update.hpp/.cpp<br/>三维局部候选、曲面评分与缓存失效"]
     Spatial --> SpatialSource["source.hpp<br/>三维源平面粒子发射"]
     Spatial --> SpatialBackend["backend.hpp · output.cpp<br/>后端组件装配与三维几何输出"]
 
@@ -167,27 +168,41 @@ $$
 
 ## 元胞更新与局部平滑
 
-反应格剩余位点数小于 5 时，按刘婉第 3.6.2 节的方法，在原格及相邻硅表面格中选择删除位置：二维八邻域，三维二十六邻域。默认尺度、初始库存和阈值采用于骁第 4.1 节。
+每格初始库存为 30，反应后剩余位点数小于 5 时触发更新。更新由局部几何评分、固体连通性筛选、四态库存守恒迁移及碎片释放组成。评分沿用刘婉第 3.6.2 节的距离与角度形式；连通性约束、守恒重映射和碎片处理为本程序的数值设计。
 
-对候选格计算中心连线与原格局部外法线的夹角 $\alpha_i$，以及格中心到更新前拟合曲线/面的有符号最近点距离 $d_{\mathrm{out},i}$。角度用弧度，距离用格长，气体侧为正；原格的 $\alpha_i=0$。选择评分最小者：
+**候选与几何评分。** 候选包括原反应格及一圈邻域内的硅表面格：二维八邻域、三维二十六邻域。候选和库存接收格限定在原格所属的局部面连通硅分支，面邻接采用二维四邻接、三维六邻接，并处理横向周期边界。
+
+将实际碰撞点投影到原格的局部二次曲线/曲面，在投影位置计算拟合法线，以碰撞法线校准外向符号；有符号距离采用相同的方向。设候选中心连线与该外法线的夹角为 $\alpha_i$，候选中心到拟合曲线/面的最近点距离为 $d_{\mathrm{out},i}$，气体侧为正。角度使用弧度、距离使用格长，原格取 $\alpha_i=0$：
 
 $$
-S_i=\frac{m}{n}\alpha_i-d_{\mathrm{out},i},\qquad \frac{m}{n}=0.3.
+S_i=0.3\alpha_i-d_{\mathrm{out},i}.
 $$
 
-二维用曲线最近点求距离，三维用多起点 Newton 投影。选中邻格时，将其四组分库存整体搬至原格，再清空选中格并改为气体。原格的阈值残量计入 `pruned_si`、`pruned_cl`；`deleted_cells` 统计删格次数，`relocated_cells` 统计库存搬移次数。实际删除位置附近的边界、局部拟合、候选格、共享节点及 Hermite 缓存同步更新；仅组分变化时复用几何缓存。
+二维采用曲线最近点投影，三维采用多起点 Newton 投影。局部拟合无法定义外向轴，或投影法线与碰撞法线正交时，使用碰撞点的切平面完成评分。
+
+**连通性选择。** 对候选作虚拟删除，检查其剩余固体面邻格是否仍通过全局周期网格互相连通。先在保持连接的候选中选择最小评分；评分相同时选择位移较小者，完全等价时随机选择。若全部候选都导致断裂，按同一评分顺序推进，并处理断裂后的碎片。
+
+**守恒迁移。** 选中邻格时，将其四态库存整体移到原格，再清空选中格。原格反应后的残余组分分配到同一局部分支内的空余位点，删除格不参与接收。设接收格当前库存为 $N_j$、容量为 $C=30$，每分配一个位点，选择接收格的概率为：
+
+$$
+P_j=\frac{C-N_j}{\sum_k(C-N_k)}.
+$$
+
+随后按残余四态组分的数量比例抽取一个状态，放入所选空位并更新容量，直到残量全部转移。四种组分的总数分别守恒，每格库存不超过 30。接收容量不足时保留反应后的库存和材料格，延后几何更新；后续碰撞继续反应，库存耗尽时即可推进。元胞更新使用独立于粒子发射和表面反应的随机流。
+
+**碎片与缓存更新。** 固定掩膜和底部硅为锚点。完全无面邻接的孤立格，以及断裂后不再面连接到锚点的固体分量，从静态基底中释放，Si 与已结合 Cl 分别记入 `detached_si`、`detached_cl`。这部分作为固体碎片处理，飞行和再沉积未建模；仍有面连接的薄尖端按正常表面继续演化。
+
+实际删除格和释放格附近的边界、局部拟合、反应格候选、共享节点及 Hermite 缓存同步失效；仅组分变化时复用几何缓存。`deleted_cells` 统计更新删除格数，`relocated_cells` 统计邻格库存搬移次数，`detached_cells` 统计释放格数；`redistributed_si`、`redistributed_cl` 统计残余库存转移量，`deferred_updates` 统计容量不足而延后的更新。
 
 库存账目满足：
 
 $$
-N_{\mathrm{Si,initial}}=N_{\mathrm{Si,remaining}}+N_{\mathrm{Si,reacted}}+N_{\mathrm{Si,pruned}},
+N_{\mathrm{Si,initial}}=N_{\mathrm{Si,remaining}}+N_{\mathrm{Si,reacted}}+N_{\mathrm{Si,detached}},
 $$
 
 $$
-N_{\mathrm{Cl,captured}}=N_{\mathrm{Cl,surface}}+4N_{\mathrm{SiCl_4}}+N_{\mathrm{Cl,pruned}}.
+N_{\mathrm{Cl,captured}}=N_{\mathrm{Cl,surface}}+4N_{\mathrm{SiCl_4}}+N_{\mathrm{Cl,detached}}.
 $$
-
-当前评分约束局部推进与平滑，尚未加入连通性筛选或独立碎片脱离模型。后续策略见 [元胞更新改进设计](docs/cell-update.md)。
 
 ## 构建与使用
 

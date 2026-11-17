@@ -26,7 +26,7 @@ public:
     Engine(Settings s,typename Backend::Source src,std::unique_ptr<Reaction> rx,
            CaptureProbability p=cosine_capture)
         :settings(s),grid(s.geometry),surface(grid,s.fit_radius,s.surface_subdivisions),transport(grid,surface),
-         cell_updater(grid,surface),source(std::move(src)),capture(std::move(p)),reaction(std::move(rx)),
+         cell_updater(grid,surface,s.smoothing_weight,s.seed+2000003),source(std::move(src)),capture(std::move(p)),reaction(std::move(rx)),
          source_rng(s.seed),event_rng(s.seed+1000003),primary_hits(grid.material.size()),
          secondary_hits(grid.material.size()),initial_si(grid.silicon_inventory()) {}
 
@@ -51,13 +51,12 @@ public:
                         reaction->apply(grid.sites[cell],mu,probability,event_rng);
                         ++bin.captures;bin.removed+=reaction->removed-before;
                         if(grid.remaining(cell)<grid.geometry.deletion_threshold) {
-                            auto removal=cell_updater.remove(cell);
-                            for(int state=0;state<4;++state) {
-                                stats.pruned_si+=removal.residual[state];
-                                stats.pruned_cl+=state*removal.residual[state];
-                            }
+                            auto removal=cell_updater.remove(cell,hit->normal,hit->position);
                             stats.relocated_cells+=removal.relocated;
-                            ++stats.deleted_cells;
+                            stats.deleted_cells+=removal.reaction_cells;
+                            stats.detached_cells+=removal.detached_cells;
+                            stats.detached_si+=removal.detached_si;stats.detached_cl+=removal.detached_cl;
+                            stats.redistributed_si+=removal.redistributed_si;stats.redistributed_cl+=removal.redistributed_cl;
                         }
                         break;
                     }
@@ -100,13 +99,29 @@ public:
         out.field("interior_exits",transport.diagnostics.interior_exits);out.field("normal_mapped_hits",transport.diagnostics.normal_mapped_hits);
         out.field("mapping_failures",transport.diagnostics.mapping_failures);
         out.field("off_normal_mapped_hits",transport.diagnostics.off_normal_mapped_hits);out.field("max_mapping_offset_cells",transport.diagnostics.max_mapping_offset);
-        out.field("pruned_si",stats.pruned_si);out.field("pruned_cl",stats.pruned_cl);
+        out.field("detached_si",stats.detached_si);out.field("detached_cl",stats.detached_cl);out.field("detached_cells",stats.detached_cells);
+        out.field("detached_material",std::string("released_from_static_substrate"));
+        out.field("inventory_update",std::string("conservative"));
+        out.field("update_seed",settings.seed+2000003);
+        out.field("smoothing_weight",settings.smoothing_weight);
+        out.field("inventory_remap",std::string("slots"));
+        out.field("update_geometry",std::string("oriented_quadratic"));
+        out.field("update_normal",std::string("projected-fit"));
+        out.field("reoriented_fits",cell_updater.diagnostics.reoriented_fits);
+        out.field("tangent_fallbacks",cell_updater.diagnostics.tangent_fallbacks);
+        out.field("redistributed_si",stats.redistributed_si);out.field("redistributed_cl",stats.redistributed_cl);
+        out.field("deferred_updates",cell_updater.diagnostics.deferred_updates);
         out.field("periodic_orbits",transport.diagnostics.periodic_orbits);
         out.field("rank_deficient_fits",surface.rank_deficient_fits);out.field("undefined_normal_fits",surface.undefined_normal_fits);
         out.field("captures",reaction->captures);out.field("removed_si",reaction->removed);
         out.field("sicl4_products",reaction->products_sicl4);out.field("initial_si",initial_si);
         out.field("remaining_si",grid.silicon_inventory());out.field("surface_cl",grid.chlorine_inventory());
         out.field("relocated_cells",stats.relocated_cells);out.field("deleted_cells",stats.deleted_cells);
+        out.field("cell_update_method",std::string("local_connected_transfer"));
+        out.field("undefined_fit_removals",cell_updater.diagnostics.undefined_fit_removals);
+        out.field("disconnected_donors",cell_updater.diagnostics.disconnected_donors);
+        out.field("redirected_removals",cell_updater.diagnostics.redirected_removals);
+        out.field("unavoidable_splits",cell_updater.diagnostics.unavoidable_splits);
         out.field("fits",surface.fit_count);out.field("elapsed_seconds",elapsed_seconds);
     }
 };
