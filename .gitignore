@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 tmp/
 /outputs/
+/docs/
 /.vscode/c_cpp_properties.json
