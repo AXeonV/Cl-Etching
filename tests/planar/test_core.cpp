@@ -401,7 +401,7 @@ void cell_removal_and_inventory_transfer() {
     int original = grid.index(x, 20), protrusion = grid.index(x - 1, 19);
     grid.sites[original] = {1, 1, 1, 1};
     grid.material[protrusion] = Silicon;
-    std::array<uint16_t, 4> inventory{10, 4, 5, 6};
+    std::array<uint16_t, 4> inventory{2, 1, 1, 1};
     grid.sites[protrusion] = inventory;
     int intermediate = grid.index(x - 1, 20);
     Sites near_inventory{6, 7, 8, 9};
@@ -413,8 +413,8 @@ void cell_removal_and_inventory_transfer() {
     auto removal = update_cell(updater, grid, grid.index(x, 20), {0, 0, -1});
     check(removal.relocated && removal.cell == protrusion,
       "remove protruding neighbor rather than create a hole beneath it");
-    check(grid.sites[original] == Sites{11, 5, 6, 7} &&
-            grid.sites[intermediate] == near_inventory && grid.material[original] == Silicon,
+    check(grid.sites[original] == Sites{3, 2, 2, 2} && grid.sites[intermediate] == near_inventory &&
+            grid.material[original] == Silicon,
       "move donor and preserve residual states without changing full intermediate cells");
     check(grid.material[protrusion] == Gas && grid.remaining(protrusion) == 0,
       "selected protrusion becomes gas");
@@ -652,31 +652,39 @@ void connectivity_matches_global_components() {
 }
 
 void collision_projection_and_periodic_image() {
-  std::array<int, 2> chosen{};
-  for (int side = 0; side < 2; ++side) {
-    Grid grid({40, 80, 10, 0, 40});
-    for (int z = 0; z < 80; ++z)
-      for (int x = 0; x < 40; ++x) {
-        int cell = grid.index(x, z), top = std::max(0, 32 - (x - 20) * (x - 20));
-        grid.material[cell] = z >= top ? Silicon : Gas;
-        grid.sites[cell] = z >= top ? Sites{30, 0, 0, 0} : Sites{};
+  for (uint16_t stock : {1, 30}) {
+    std::array<int, 2> chosen{};
+    for (int side = 0; side < 2; ++side) {
+      Grid grid({40, 80, 10, 0, 40});
+      for (int z = 0; z < 80; ++z)
+        for (int x = 0; x < 40; ++x) {
+          int cell = grid.index(x, z), top = std::max(0, 32 - (x - 20) * (x - 20));
+          grid.material[cell] = z >= top ? Silicon : Gas;
+          grid.sites[cell] = z >= top ? Sites{30, 0, 0, 0} : Sites{};
+        }
+      for (int x : {19, 21}) {
+        int cell = grid.index(x, 30);
+        grid.material[cell] = Silicon;
+        grid.sites[cell] = {30, 0, 0, 0};
       }
-    for (int x : {19, 21}) {
-      int cell = grid.index(x, 30);
-      grid.material[cell] = Silicon;
-      grid.sites[cell] = {30, 0, 0, 0};
+      for (int x : {19, 21})
+        grid.sites[grid.index(x, 31)] = {stock, 0, 0, 0};
+      int original = grid.index(20, 32);
+      grid.sites[original] = {};
+      grid.refresh(20, 40, 80);
+      Surface surface(grid);
+      Curve curve = surface.curve(20, 32);
+      Vec point = curve.position(side == 0 ? -0.3 : 0.3);
+      CellUpdater updater(grid, surface);
+      chosen[side] = updater.remove(original, {0, 0, -1}, point).cell;
     }
-    int original = grid.index(20, 32);
-    grid.sites[original] = {};
-    grid.refresh(20, 40, 80);
-    Surface surface(grid);
-    Curve curve = surface.curve(20, 32);
-    Vec point = curve.position(side == 0 ? -0.3 : 0.3);
-    CellUpdater updater(grid, surface);
-    chosen[side] = updater.remove(original, {0, 0, -1}, point).cell;
+    if (stock == 30)
+      check(
+        chosen[0] == 32 * 40 + 20 && chosen[1] == chosen[0], "满库存侧邻格的搬移代价使原格优先");
+    else
+      check(chosen[0] != chosen[1] && chosen[0] % 40 + chosen[1] % 40 == 40,
+        "the actual contact projection selects reflected counterparts on a curved floor");
   }
-  check(chosen[0] != chosen[1] && chosen[0] % 40 + chosen[1] % 40 == 40,
-    "the actual contact projection selects reflected counterparts on a curved floor");
   Geometry g{40, 80, 20, 0, 40};
   Grid a(g), b(g);
   for (auto* grid : {&a, &b}) {

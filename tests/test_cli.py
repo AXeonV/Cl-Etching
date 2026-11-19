@@ -35,6 +35,15 @@ class CommandLineTests(unittest.TestCase):
                         self.assertEqual(inventory_errors(run)["silicon"], 0)
                         if model == "chlorination":
                             self.assertEqual(inventory_errors(run)["chlorine"], 0)
+                        impacts = np.genfromtxt(run["directory"] / "lateral_impacts.csv", delimiter=",",
+                                               names=True, dtype=None, encoding="utf-8")
+                        for field, total in (("hits", "silicon_hits"), ("captures", "captures"),
+                                             ("removed_si", "removed_si"), ("deleted_cells", "deleted_cells")):
+                            self.assertEqual(impacts[field].sum(), run["meta"][total])
+                        for direct, field in ((True, "primary"), (False, "secondary")):
+                            rows = impacts[(impacts["arrived_from"] == "source") == direct]
+                            columns = np.bincount(rows["x_cell"], weights=rows["hits"], minlength=24)
+                            np.testing.assert_array_equal(columns, run[field].reshape(-1, 24).sum(axis=0))
                         self.assertTrue(np.isfinite(run["curves"]).all())
                         self.assertTrue(np.isfinite(run["surface_nodes"]).all())
                         self.assertEqual(run["curves"].shape[1], 19 if dimension == 3 else 10)
@@ -82,6 +91,7 @@ class CommandLineTests(unittest.TestCase):
                         self.assertEqual(run["meta"]["inventory_update"],"conservative")
                         self.assertEqual(run["meta"]["inventory_remap"],"slots")
                         self.assertEqual(run["meta"]["update_geometry"],"oriented_quadratic")
+                        self.assertEqual(run["meta"]["update_score"], "angle_distance_tangential_stock")
                         self.assertEqual(inventory_errors(run)["silicon"],0)
                         if model=="chlorination":self.assertEqual(inventory_errors(run)["chlorine"],0)
                         self.assertTrue((run["sites"][run["material"]==1].sum(axis=-1)>0).all())

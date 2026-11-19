@@ -30,6 +30,10 @@ struct AngleBin {
   long long primary = 0, secondary = 0, captures = 0, removed = 0;
 };
 
+struct ImpactCounts {
+  long long hits = 0, captures = 0, removed_si = 0, deleted_cells = 0;
+};
+
 struct Statistics {
   std::array<AngleBin, 90> angles{};
   long long particles = 0, silicon_hits = 0, mask_hits = 0;

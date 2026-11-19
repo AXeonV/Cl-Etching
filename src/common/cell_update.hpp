@@ -21,6 +21,12 @@ public:
   CellUpdate(Grid& grid, CellUpdateDiagnostics& diagnostics, unsigned long long seed)
       : grid(grid), diagnostics(diagnostics), rng(seed), connectivity(grid) {}
 
+  // 邻格搬回原格的库存比例乘以切向位移，单位为格长。
+  double transfer_cost(int donor, double tangent_shift) const {
+    double fraction = double(grid.remaining(donor)) / grid.geometry.atoms_per_cell;
+    return fraction * tangent_shift;
+  }
+
   bool isolated(int original) const {
     if (grid.is_anchor(original))
       return false;

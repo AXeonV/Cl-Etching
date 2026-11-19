@@ -201,7 +201,7 @@ void neighbor_transfer_and_cache() {
     int original = grid.index(16, y, 20), tip = grid.index(16, y - 1, 19);
     grid.sites[original] = {1, 1, 1, 1};
     grid.material[tip] = Silicon;
-    Sites inventory{10, 4, 5, 6};
+    Sites inventory{2, 1, 1, 1};
     grid.sites[tip] = inventory;
     int intermediate = grid.index(16, y - 1, 20);
     Sites near_inventory{6, 7, 8, 9};
@@ -215,8 +215,7 @@ void neighbor_transfer_and_cache() {
     long long si = grid.silicon_inventory(), cl = grid.chlorine_inventory();
     auto result = update_cell(updater, grid, original, {0, 0, -1});
     check(result.relocated && grid.material[tip] == Gas &&
-            grid.sites[original] == Sites{11, 5, 6, 7} &&
-            grid.sites[intermediate] == near_inventory,
+            grid.sites[original] == Sites{3, 2, 2, 2} && grid.sites[intermediate] == near_inventory,
       "connected donor transfer in y, including periodic seam");
     check(grid.silicon_inventory() == si && grid.chlorine_inventory() == cl,
       "preserve Si and Cl during relocation");
@@ -493,34 +492,43 @@ void connectivity_matches_global_components() {
 }
 
 void collision_projection_and_periodic_image() {
-  std::array<int, 2> chosen{};
-  for (int side = 0; side < 2; ++side) {
-    Grid grid({20, 20, 80, 10, 0, 20, 20});
-    for (int z = 0; z < 80; ++z)
+  for (uint16_t stock : {1, 30}) {
+    std::array<int, 2> chosen{};
+    for (int side = 0; side < 2; ++side) {
+      Grid grid({20, 20, 80, 10, 0, 20, 20});
+      for (int z = 0; z < 80; ++z)
+        for (int y = 0; y < 20; ++y)
+          for (int x = 0; x < 20; ++x) {
+            int cell = grid.index(x, y, z), top = std::max(0, 32 - (x - 10) * (x - 10));
+            grid.material[cell] = z >= top ? Silicon : Gas;
+            grid.sites[cell] = z >= top ? Sites{30, 0, 0, 0} : Sites{};
+          }
       for (int y = 0; y < 20; ++y)
-        for (int x = 0; x < 20; ++x) {
-          int cell = grid.index(x, y, z), top = std::max(0, 32 - (x - 10) * (x - 10));
-          grid.material[cell] = z >= top ? Silicon : Gas;
-          grid.sites[cell] = z >= top ? Sites{30, 0, 0, 0} : Sites{};
+        for (int x : {9, 11}) {
+          int cell = grid.index(x, y, 30);
+          grid.material[cell] = Silicon;
+          grid.sites[cell] = {30, 0, 0, 0};
         }
-    for (int y = 0; y < 20; ++y)
-      for (int x : {9, 11}) {
-        int cell = grid.index(x, y, 30);
-        grid.material[cell] = Silicon;
-        grid.sites[cell] = {30, 0, 0, 0};
-      }
-    int original = grid.index(10, 10, 32);
-    grid.sites[original] = {};
-    grid.refresh(10, 10, 40, 80);
-    Surface surface(grid);
-    Patch patch = surface.patch(10, 10, 32);
-    Vec3 offset{side == 0 ? -0.3 : 0.3, 0, 0};
-    Vec3 point = patch.position(dot(offset, patch.u_axis), dot(offset, patch.v_axis));
-    CellUpdater updater(grid, surface);
-    chosen[side] = updater.remove(original, {0, 0, -1}, point).cell;
+      for (int y = 0; y < 20; ++y)
+        for (int x : {9, 11})
+          grid.sites[grid.index(x, y, 31)] = {stock, 0, 0, 0};
+      int original = grid.index(10, 10, 32);
+      grid.sites[original] = {};
+      grid.refresh(10, 10, 40, 80);
+      Surface surface(grid);
+      Patch patch = surface.patch(10, 10, 32);
+      Vec3 offset{side == 0 ? -0.3 : 0.3, 0, 0};
+      Vec3 point = patch.position(dot(offset, patch.u_axis), dot(offset, patch.v_axis));
+      CellUpdater updater(grid, surface);
+      chosen[side] = updater.remove(original, {0, 0, -1}, point).cell;
+    }
+    if (stock == 30)
+      check(chosen[0] == (32 * 20 + 10) * 20 + 10 && chosen[1] == chosen[0],
+        "满库存侧邻格的搬移代价使原格优先");
+    else
+      check(chosen[0] != chosen[1] && chosen[0] % 20 + chosen[1] % 20 == 20,
+        "three-dimensional contact projections select reflected counterparts");
   }
-  check(chosen[0] != chosen[1] && chosen[0] % 20 + chosen[1] % 20 == 20,
-    "three-dimensional contact projections select reflected counterparts");
   Geometry g{20, 20, 60, 20, 0, 20, 20};
   Grid a(g), b(g);
   for (auto* grid : {&a, &b}) {

@@ -51,7 +51,7 @@ CellRemoval CellUpdater::remove(int original, Vec3 collision_normal, Vec collisi
         neighborhood.push_back(grid.index(x + dx, z + dz));
   auto branch = update.connectivity.local_silicon_branch(original, neighborhood);
 
-  // 原格夹角取零；其余候选沿用角度权重 0.3 与有符号距离评分。
+  // 原格的夹角和库存搬移距离均为零。
   std::vector<RemovalCandidate> candidates{{original, -origin_distance, 0}};
   for (int dz = -radius; dz <= radius; ++dz)
     for (int dx = -radius; dx <= radius; ++dx) {
@@ -69,7 +69,9 @@ CellRemoval CellUpdater::remove(int original, Vec3 collision_normal, Vec collisi
       double angle = std::acos(std::clamp(dot(unit(offset), normal), -1.0, 1.0));
       double distance = use_curve ? orientation * curve.project(curve.origin + offset).distance
                                   : dot(offset, collision);
-      candidates.push_back({cell, normal_weight * angle - distance, dot(offset, offset)});
+      double tangent_shift = std::abs(offset.x * normal.z - offset.z * normal.x);
+      double score = normal_weight * angle - distance + update.transfer_cost(cell, tangent_shift);
+      candidates.push_back({cell, score, dot(offset, offset)});
     }
 
   return update.apply(original, {std::move(branch), std::move(candidates)}, erase_cell);

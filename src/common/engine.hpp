@@ -23,6 +23,8 @@ public:
   Random source_rng, event_rng;
   Statistics stats;
   std::vector<uint32_t> primary_hits, secondary_hits;
+  // 按横向列和上一个反射面记录撞击、化学去除及实际删格。Gas 表示直接入射。
+  std::vector<std::array<ImpactCounts, 3>> lateral_impacts;
   long long initial_si;
 
   Engine(Settings s, typename Backend::Source src, std::unique_ptr<Reaction> rx,
@@ -31,13 +33,15 @@ public:
         transport(grid, surface), cell_updater(grid, surface, s.smoothing_weight, s.seed + 2000003),
         source(std::move(src)), capture(std::move(p)), reaction(std::move(rx)), source_rng(s.seed),
         event_rng(s.seed + 1000003), primary_hits(grid.material.size()),
-        secondary_hits(grid.material.size()), initial_si(grid.silicon_inventory()) {}
+        secondary_hits(grid.material.size()), lateral_impacts(grid.geometry.nx),
+        initial_si(grid.silicon_inventory()) {}
 
   void advance(long long particle_count) {
     for (long long particle_index = 0; particle_index < particle_count; ++particle_index) {
       auto particle = source.emit(source_rng, grid.geometry);
       ++stats.particles;
 
+      Material previous_surface = Gas;
       for (int bounce = 0;; ++bounce) {
         auto hit = transport.next_hit(particle);
         if (!hit) {
@@ -58,18 +62,25 @@ public:
           ++(bounce == 0 ? bin.primary : bin.secondary);
           (bounce == 0 ? primary_hits : secondary_hits)[cell]++;
 
+          auto& impact = lateral_impacts[cell % grid.geometry.nx][previous_surface];
+          ++impact.hits;
           double capture_probability = capture(mu);
           if (uniform(event_rng) < capture_probability) {
             long long removed_before = reaction->removed;
             reaction->apply(grid.sites[cell], mu, capture_probability, event_rng);
             ++bin.captures;
-            bin.removed += reaction->removed - removed_before;
+            long long removed = reaction->removed - removed_before;
+            bin.removed += removed;
+            ++impact.captures;
+            impact.removed_si += removed;
 
             // 反应先改变库存；低于阈值后才尝试几何更新或延后删格。
             if (grid.remaining(cell) < grid.geometry.deletion_threshold) {
               auto removal = cell_updater.remove(cell, hit->normal, hit->position);
               stats.relocated_cells += removal.relocated;
               stats.deleted_cells += removal.reaction_cells;
+              lateral_impacts[removal.cell % grid.geometry.nx][previous_surface].deleted_cells +=
+                removal.reaction_cells;
               stats.detached_cells += removal.detached_cells;
               stats.detached_si += removal.detached_si;
               stats.detached_cl += removal.detached_cl;
@@ -88,6 +99,7 @@ public:
           ++stats.bounce_limit;
           break;
         }
+        previous_surface = static_cast<Material>(grid.material[cell]);
         particle.position = hit->position;
         grid.wrap_position(particle.position);
         particle.direction = reflected(particle.direction, hit->normal);
@@ -113,6 +125,16 @@ public:
       angles << i << ',' << i + 1 << ',' << bin.primary << ',' << bin.secondary << ','
              << bin.captures << ',' << bin.removed << '\n';
     }
+
+    std::ofstream impacts(directory + "/lateral_impacts.csv");
+    impacts << "x_cell,arrived_from,hits,captures,removed_si,deleted_cells\n";
+    for (size_t x = 0; x < lateral_impacts.size(); ++x)
+      for (Material from : {Gas, Mask, Silicon}) {
+        const auto& counts = lateral_impacts[x][from];
+        const char* label = from == Gas ? "source" : (from == Mask ? "mask" : "silicon");
+        impacts << x << ',' << label << ',' << counts.hits << ',' << counts.captures << ','
+                << counts.removed_si << ',' << counts.deleted_cells << '\n';
+      }
 
     Summary out(directory + "/summary.json");
     out.field("model", reaction->name());
@@ -147,6 +169,7 @@ public:
     out.field("update_seed", settings.seed + 2000003);
     out.field("smoothing_weight", settings.smoothing_weight);
     out.field("inventory_remap", std::string("slots"));
+    out.field("update_score", std::string("angle_distance_tangential_stock"));
     out.field("update_geometry", std::string("oriented_quadratic"));
     out.field("update_normal", std::string("projected-fit"));
     out.field("reoriented_fits", cell_updater.diagnostics.reoriented_fits);
